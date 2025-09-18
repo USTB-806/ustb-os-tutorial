@@ -1,12 +1,12 @@
-# Starlight Starter Kit: Basics
+# USTB Operating System Course Online Tutorial
 
 [![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
 
-```
-npm create astro@latest -- --template starlight
-```
+Online documentation for USTB operating system course.
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+[Visit this documentation on GitHub Pages](https://ustb-806.github.io/ustb-os-tutorial/).
+
+This website is built with [starlight-theme-rapide](https://github.com/HiDeoo/starlight-theme-rapide).
 
 ## 🚀 Project Structure
 
