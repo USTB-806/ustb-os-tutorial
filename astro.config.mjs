@@ -7,6 +7,7 @@ import starlightThemeRapide from 'starlight-theme-rapide';
 export default defineConfig({
 	site: 'https://USTB-806.github.io',
 	base: '/ustb-os-tutorial',
+	trailingSlash: "always",
 	integrations: [
 		starlight({
 			plugins: [starlightThemeRapide()],
