@@ -11,9 +11,13 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			plugins: [starlightThemeRapide()],
-			title: 'My Docs',
+			title: 'USTB Operating System Tutorial',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/USTB-806/ustb-os-tutorial' }],
 			sidebar: [
+				{
+					label: '环境配置',
+					autogenerate: {directory: 'env-config'},
+				},
 				{
 					label: 'Guides',
 					items: [
@@ -26,6 +30,7 @@ export default defineConfig({
 					autogenerate: { directory: 'reference' },
 				},
 			],
+			defaultLocale: 'zh-cn',
 		}),
 	],
 });
