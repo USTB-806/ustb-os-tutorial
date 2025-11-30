@@ -3,6 +3,8 @@ title: 环境配置
 description: 环境配置指导.
 ---
 
+## 基础开发环境
+
 工欲善其事, 必先利其器. 在开始操作系统之前, 你应该先完成相关环境的配置, 这是十分重要的.
 
 为了减轻同学们配环境的负担, 我们决定使用 Docker 环境。Docker 是一个开源的容器化平台, 可以帮助开发者将应用程序及其依赖项打包到一个独立的容器中, 并在任何环境中运行。
@@ -46,3 +48,30 @@ Docker version 28.1.1, build 4eba377
 
 完成上述配置之后就可以开始实验了。
 
+## 加载实验环境和代码
+
+### linux
+获取实验环境
+我们会提供一个包含所有实验环境的 Docker 镜像的tar包，将其下载到本地，并记住这个地址（例如/home/yourname/ustb-os-lab/ustb-os.tar）:
+```bash
+# 加载docker环境
+# 将其中的/mnt/c/docker-image-os/ustb-os.tar替换为你下载的地址
+# 例如/home/yourname/ustb-os-lab/ustb-os.tar
+docker load -i /mnt/c/docker-image-os/ustb-os.tar
+
+# 查看加载的镜像
+docker images
+
+# 运行容器，挂载本地目录到容器中的/oslab目录
+# 这样你对容器中/oslab目录的修改会反映在你的目录中
+# 其中~/yyn是你本地的目录，你可以将其替换为你自己的目录
+# /oslab是容器中的目录，你也可以自己进行设置
+docker run -it --name myoslab -v ~/yyn:/oslab ustb-os:1.0
+```
+
+如下图所示，容器中的/oslab目录被挂载到了本地的~/yyn目录中。
+在容器中的/oslab中创建了test文件夹，在退出之后，你可以在本地的~/yyn目录中看到test文件夹。
+
+![public/images/image.png](../../../../public/images/image.png)
+
+如此你就可以将代码保存到本地，然后使用docker的环境进行开发。
