@@ -19,9 +19,14 @@ export default defineConfig({
 					autogenerate: {directory: 'env-config'},
 				},
 				{
-					label: 'Guides',
-					autogenerate: {directory: 'guides'},
+					label: 'Lab1',
+					autogenerate: {directory: 'lab1'},
 				},
+					{
+					label: 'Lab2',
+					autogenerate: {directory: 'lab2'},
+				},
+				
 				{
 					label: 'Reference',
 					autogenerate: { directory: 'reference' },
