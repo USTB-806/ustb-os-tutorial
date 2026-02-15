@@ -20,15 +20,19 @@
 }
 
 :root[data-theme='dark'] {
-	--sl-color-accent-low: hsl(240, 70%, 15%);
-	--sl-color-accent: hsl(230, 80%, 65%);
-	--sl-color-accent-high: hsl(230, 90%, 80%);
+	--sl-color-accent-low: hsl(212, 60%, 15%);
+	--sl-color-accent: hsl(208, 100%, 34%);
+	--sl-color-accent-high: hsl(212, 100%, 75%);
+
+	--sl-color-bg-sidebar: hsl(210, 11%, 15%);
 	
-	--sl-color-accent-2-low: hsl(260, 50%, 20%);
-	--sl-color-accent-2: hsl(260, 70%, 65%);
-	--sl-color-accent-2-high: hsl(260, 80%, 80%);
-	
-	--sl-color-bg-sidebar: hsl(224, 12%, 12%);
+	--sl-color-bg: hsl(210, 10%, 9%);
+
+	--sl-color-gray-1: hsl(210, 10%, 90%);
+	--sl-color-gray-2: hsl(210, 10%, 70%);
+	--sl-color-gray-3: hsl(210, 10%, 50%);
+    
+    --sl-color-hairline-light: hsla(0, 0%, 100%, 0.1);
 }
 
 nav.sidebar a,
