@@ -1,0 +1,21 @@
+﻿:root {
+	--sl-hue-accent: 240;
+	--sl-color-accent-low: rgb(219, 219, 235);
+	--sl-color-accent: rgb(0, 92, 173);
+	--sl-color-accent-high: hsl(240, 70%, 25%);
+	
+	--sl-hue-accent-2: 260;
+	--sl-color-accent-2-low: hsl(260, 60%, 92%);
+	--sl-color-accent-2: hsl(260, 60%, 55%);
+	--sl-color-accent-2-high: hsl(260, 60%, 30%);
+}
+
+:root[data-theme='dark'] {
+	--sl-color-accent-low: hsl(240, 70%, 15%);
+	--sl-color-accent: hsl(240, 70%, 60%);
+	--sl-color-accent-high: hsl(240, 70%, 85%);
+	
+	--sl-color-accent-2-low: hsl(260, 60%, 15%);
+	--sl-color-accent-2: hsl(260, 60%, 65%);
+	--sl-color-accent-2-high: hsl(260, 60%, 85%);
+}

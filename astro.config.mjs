@@ -12,7 +12,17 @@ export default defineConfig({
 		starlight({
 			plugins: [starlightThemeRapide()],
 			title: 'USTB Operating System Tutorial',
+			defaultLocale: 'root',
+			locales: {
+				root: {
+					label: '简体中文',
+					lang: 'zh-CN',
+				},
+			},
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/USTB-806/ustb-os-tutorial' }],
+			customCss: [
+				'./src/styles/custom.css',
+			],
 			sidebar: [
 				{
 					label: '环境配置',
@@ -32,7 +42,6 @@ export default defineConfig({
 					autogenerate: { directory: 'reference' },
 				},
 			],
-			defaultLocale: 'zh-cn',
 		}),
 	],
 });
