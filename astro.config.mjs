@@ -25,20 +25,39 @@ export default defineConfig({
 			],
 			sidebar: [
 				{
-					label: '环境配置',
+					label: '写在前面',
+					autogenerate: {directory: 'preface'},
+				},
+				{
+					label: 'Lab0. 环境配置',
 					autogenerate: {directory: 'env-config'},
 				},
 				{
-					label: 'Lab1',
+					label: 'Lab1. Rust语言基础',
 					autogenerate: {directory: 'lab1'},
 				},
-					{
-					label: 'Lab2',
+				{
+					label: 'Lab2. 批处理系统',
 					autogenerate: {directory: 'lab2'},
 				},
-				
 				{
-					label: 'Reference',
+					label: 'Lab3. 分时系统',
+					autogenerate: {directory: 'lab3'},
+				},
+				{
+					label: 'Lab4. 地址空间',
+					autogenerate: {directory: 'lab4'},
+				},
+				{
+					label: 'Lab5. 进程管理',
+					autogenerate: {directory: 'lab5'},
+				},
+				{
+					label: 'Lab6. 文件系统',
+					autogenerate: {directory: 'lab6'},
+				},
+				{
+					label: '杂项/附录/参考',
 					autogenerate: { directory: 'reference' },
 				},
 			],

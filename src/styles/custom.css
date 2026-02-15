@@ -2,6 +2,9 @@
 	--sl-hue-accent: 240;
 	--sl-hue-accent-2: 260;
 	--sl-sidebar-width: 15rem;
+	--sl-text-sm: 0.81rem;
+	--sl-content-pad-x: 4rem;
+	--sl-nav-height: 3rem;
 }
 
 :root[data-theme='light'] {
@@ -27,3 +30,40 @@
 	
 	--sl-color-bg-sidebar: hsl(224, 12%, 12%);
 }
+
+/* 侧边栏标题和内容统一字重 */
+.sidebar .group-label,
+.sidebar details > summary {
+	font-weight: 400;
+}
+
+.sidebar a,
+.sidebar .group-label,
+.sidebar details > summary {
+	color: var(--sl-color-gray-2);
+	opacity: 0.85;
+}
+
+.sidebar a[aria-current="page"] {
+	color: var(--sl-color-white);
+	opacity: 1;
+	font-weight: 500;
+}
+
+.sidebar a:hover {
+	opacity: 1;
+}
+
+/* 正文字号 */
+.main-frame,
+.content-panel,
+.sl-markdown-content {
+	font-size: 0.875rem;
+}
+
+.sl-markdown-content h1 { font-size: 2rem; }
+.sl-markdown-content h2 { font-size: 1.5rem; }
+.sl-markdown-content h3 { font-size: 1.25rem; }
+.sl-markdown-content h4 { font-size: 1.1rem; }
+.sl-markdown-content h5 { font-size: 1rem; }
+.sl-markdown-content h6 { font-size: 0.9rem; }
