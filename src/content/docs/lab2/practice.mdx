@@ -1,0 +1,34 @@
+---
+title: 练习
+description: lab2 练习，硬编码 sys_write 和 C Lib 支持
+---
+
+执行 `user/c/apps/read.c` 程序，尝试让其输出 `Read content: Success!`.
+
+你可能注意到了 commit 记录里 `user/c/lib/lib.h` 的添加：
+
+```c
+#define SYSCALL_OPEN 56
+#define SYSCALL_CLOSE 57
+#define SYSCALL_READ 63
+
+isize open(const char *path, int flags);
+isize close(int fd);
+isize read(int fd, void *buf, size_t count);
+```
+
+根据你的经验，你可能还需要添加其他内容来定义这些函数.
+
+除此之外，你可以关注 `kernel/src/syscall/fs.rs` 这个文件，这是文件相关 syscalls 被定义处，尝试修改 syscalls 让 `read.c` 正常输出.
+
+另外，如果想要运行本地测试，而不是重复云端评测，可以：
+
+```
+cd ustb-os-kernel
+git clone https://github.com/USTB-806/ustb-os-checker.git
+
+cd ustb-os-checker
+python3 test_runner.py 2
+```
+
+意为运行第 2 章的测试.
