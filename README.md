@@ -8,7 +8,7 @@ Online documentation for USTB operating system course.
 
 ## Build
 
-This repository based on [starlight-theme-rapide](https://github.com/HiDeoo/starlight-theme-rapide), you can install dependencies by running:
+You can install dependencies by running:
 
 ```shell
 $ npm install

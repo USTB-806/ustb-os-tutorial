@@ -1,7 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightThemeRapide from 'starlight-theme-rapide';
+import starlightThemeNova from 'starlight-theme-nova';
 
 // https://astro.build/config
 export default defineConfig({
@@ -10,7 +10,7 @@ export default defineConfig({
 	trailingSlash: "always",
 	integrations: [
 		starlight({
-			plugins: [starlightThemeRapide()],
+			plugins: [starlightThemeNova()],
 			title: 'USTB Operating System Tutorial',
 			defaultLocale: 'root',
 			locales: {

@@ -1,5 +1,5 @@
 ﻿:root {
-	--sl-hue-accent: 240;
+	--sl-hue-accent: 230;
 	--sl-hue-accent-2: 260;
 	--sl-sidebar-width: 15rem;
 	--sl-text-sm: 0.81rem;
@@ -10,51 +10,68 @@
 :root[data-theme='light'] {
 	--sl-color-accent-low: hsl(240, 29%, 89%);
 	--sl-color-accent: hsl(208, 100%, 34%);
-	--sl-color-accent-high: hsl(240, 70%, 25%);
+	--sl-color-accent-high: hsl(230, 80%, 30%);
 	
-	--sl-color-accent-2-low: hsl(260, 60%, 92%);
+	--sl-color-accent-2-low: hsl(260, 50%, 92%);
 	--sl-color-accent-2: hsl(260, 60%, 55%);
-	--sl-color-accent-2-high: hsl(260, 60%, 30%);
+	--sl-color-accent-2-high: hsl(260, 70%, 35%);
 	
 	--sl-color-bg-sidebar: hsl(224, 18%, 96%);
 }
 
 :root[data-theme='dark'] {
 	--sl-color-accent-low: hsl(240, 70%, 15%);
-	--sl-color-accent: hsl(240, 70%, 60%);
-	--sl-color-accent-high: hsl(240, 70%, 85%);
+	--sl-color-accent: hsl(230, 80%, 65%);
+	--sl-color-accent-high: hsl(230, 90%, 80%);
 	
-	--sl-color-accent-2-low: hsl(260, 60%, 15%);
-	--sl-color-accent-2: hsl(260, 60%, 65%);
-	--sl-color-accent-2-high: hsl(260, 60%, 85%);
+	--sl-color-accent-2-low: hsl(260, 50%, 20%);
+	--sl-color-accent-2: hsl(260, 70%, 65%);
+	--sl-color-accent-2-high: hsl(260, 80%, 80%);
 	
 	--sl-color-bg-sidebar: hsl(224, 12%, 12%);
 }
 
-/* 侧边栏标题和内容统一字重 */
-.sidebar .group-label,
-.sidebar details > summary {
+nav.sidebar a,
+nav.sidebar .group-label,
+nav.sidebar details > summary {
+	color: var(--sl-color-gray-3);
 	font-weight: 400;
+	font-size: var(--sl-text-sm);
 }
 
-.sidebar a,
-.sidebar .group-label,
-.sidebar details > summary {
-	color: var(--sl-color-gray-2);
-	opacity: 0.85;
+nav.sidebar a[aria-current="page"],
+nav.sidebar a[aria-current="page"]:visited {
+	font-weight: 500 !important;
+	background-color: rgba(99, 102, 241, 0.15) !important;
 }
 
-.sidebar a[aria-current="page"] {
-	color: var(--sl-color-white);
-	opacity: 1;
-	font-weight: 500;
+:root[data-theme='dark'] nav.sidebar a[aria-current="page"],
+:root[data-theme='dark'] nav.sidebar a[aria-current="page"]:visited {
+	color: rgba(255, 255, 255, 0.95) !important;
 }
 
-.sidebar a:hover {
-	opacity: 1;
+nav.sidebar a:hover {
+	color: rgba(255, 255, 255, 0.85);
+	background-color: rgba(255, 255, 255, 0.05);
 }
 
-/* 正文字号 */
+:root[data-theme='light'] nav.sidebar a,
+:root[data-theme='light'] nav.sidebar .group-label,
+:root[data-theme='light'] nav.sidebar details > summary {
+	color: rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme='light'] nav.sidebar a[aria-current="page"],
+:root[data-theme='light'] nav.sidebar a[aria-current="page"]:visited {
+	color: rgba(0, 0, 0, 0.9) !important;
+	background-color: rgba(59, 130, 246, 0.12) !important;
+}
+
+:root[data-theme='light'] nav.sidebar a:hover {
+	color: rgba(0, 0, 0, 0.85);
+	background-color: rgba(0, 0, 0, 0.05);
+}
+
 .main-frame,
 .content-panel,
 .sl-markdown-content {
