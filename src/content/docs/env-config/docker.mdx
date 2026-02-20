@@ -7,19 +7,17 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 
 :::note
-如果想要详细了解更多关于Docker的内容可以参考[Docker 官方文档](https://docs.docker.com/).
-> 但其实我也不知道应该看官方文档的哪里。。。
+如果想要详细了解更多关于Docker的内容可以参考 [Docker 官方文档](https://docs.docker.com/) 和 [Linux 101 - Docker](https://101.lug.ustc.edu.cn/Ch08/).
 
-同时也建议去看b站视频[40分钟的Docker实战攻略，一期视频精通Docker](https://www.bilibili.com/video/BV1THKyzBER6/?share_source=copy_web&vd_source=f5cc4fbf0b97583045564a1d258b698b)
-> 这个倒是值得一看，有助于从整体上了解docker，当然，如果你本来就知道，也就无所谓了。
-
+同时也建议去看 bilibili 上诸如《XX分钟的Docker实战攻略》这类实操视频，这有助于从整体上了解docker，当然，如果你本来就知道，也就无所谓了。
 :::
+
 ## Docker 下载与安装
 
 <Tabs>
     <TabItem label="Windows">
 
-[windows 安装docker详细教程](https://blog.csdn.net/weixin_52286364/article/details/150379121)
+检查 BIOS 是否已经开启虚拟化，可以在任务管理器中查看. 然后在 [Docker 官网](https://docs.docker.com/get-docker/) 下载安装.
 
     </TabItem>
     <TabItem label="Linux">
@@ -52,10 +50,7 @@ sudo docker version
 
 #查看Docker运行状态
 sudo systemctl status docker
-
 ```
-
-上述内容参考来源：[docker 安装](https://blog.csdn.net/u011278722/article/details/137673353)
 
     </TabItem>
     <TabItem label = "MacOS">
