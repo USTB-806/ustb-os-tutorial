@@ -1,0 +1,181 @@
+---
+title: 所有权和内存布局
+description: Intro to Rust ownership and memory layout.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+在本次实验中，我们使用 Rust 语言编写操作系统内核. 为此同学们需要自行学习 Rust 语言.
+
+在本章中，我们会大致讲解 Rust 核心特性及 OS 相关性较大的语言特性，**其余的内容需同学们自行学习**.
+
+:::note
+学习 Rust 语言可以参考 [Rust Book](https://doc.rust-lang.org/book/) 或者 [Rust 语言圣经](https://course.rs/about-book.html). 官方文档为 [std - rust](https://doc.rust-lang.org/std/index.html) 和 [core - rust](https://doc.rust-lang.org/core/index.html).
+
+本章内容仅仅是作为对 Rust 重要语言特性的梳理，并不能直接代替对 Rust Book 或者 Rust 语言圣经的阅读. 你可以先大致阅读本章，然后通过 Rustlings 和提到的两本书来学习. 也可以在完成之后最后阅读本章.
+:::
+
+:::tip
+我们建议跟着 [Rustlings](/ustb-os-tutorial/lab1/pratice/) 进行学习，如遇到不懂的地方，再查看文档进行对应内容.
+:::
+
+本节将讲解 Rust 所有权 (ownership) 与内存布局 (memory layout).
+
+## 栈与堆
+
+栈 (Stack) 和堆 (Heap) 都是程序在运行时可供使用的内存部分，但拥有不同的组织方式：
+
+- 栈以获取值的顺序存储数据，并以相反的顺序移除数据. 这被称为后进先出 (LIFO). 所有存储在栈上的数据必须具有**编译期已知的固定大小**，例如 `i32`, `[u8; 64]`. 
+- 对于将数据放入堆的操作，需要请求一定大小的空间. 内存分配器会在堆中找到一个足够大的空闲位置，将其标记为已使用，并返回一个**指针**，即该位置的地址. 这个过程被称为在堆上分配内存，在**编译时大小未知或大小可能变化**的数据必须存储在堆上，例如 `Vec`, `String`, `Box`.
+
+将数据压入栈中比在堆上分配内存要快，这是因为内存分配器不用寻找存储新数据的位置，它知道该位置始终位于栈顶，在汇编层面，分配栈空间仅仅是栈指针寄存器 (sp) 的减少；而在堆上分配空间，分配器必须先找到足够大的空间来存放数据. 访问堆上的数据通常比访问栈上的数据慢，因为访问堆必须通过指针来定位.
+
+一旦理解了所有权，通常就不需要经常考虑栈和堆了. 但了解所有权的主要目的是管理堆数据，这有助于解释其运作原理. 栈上数据的生命周期严格绑定于其作用域 (Scope)，而堆的生命周期由程序员自己控制，很容易导致内存泄漏和悬垂指针的问题.
+
+例如对于 `let s = String::from("Rust");`，在 64 位系统上，这段代码创造了两个部分：
+
+<img title="内存布局演示" src="../../../../public/images/stack&heap.svg"></img>
+
+
+其中变量 `s` 本身位于栈上，它是一个“胖指针”结构体，包含三个 64 位字段：
+- ptr: 指向堆上实际数据的指针
+- len: 当前字符串长度
+- capacity: 堆上已分配的总缓冲区大小
+
+所有的所有权规则，操作的都是栈上的这 24 字节元数据. 至于此处为什么是 24 字节请同学们自行思考.
+
+## 使用 Move 进行所有权转移
+
+首先请谨记以下[规则](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html?highlight=stack#ownership-rules)：
+
+1. Rust 中的每一个值都有一个所有者.
+2. 同一时间只能有一个所有者.
+3. 当所有者离开作用域，这个值将被丢弃.
+
+当你将一个变量赋值给另一个变量，或者将其作为参数传递给函数时，所有权发生了转移. 如果你对 C++ 的移动语义 `std::move` 有所了解，不妨进行类比.
+
+```rust
+let s1 = String::from("hello");
+let s2 = s1;                    // Move occurs here
+// println!("{}", s1);          // Error: value borrowed here after move
+println!("{}", s2);
+```
+
+如果你觉得比较抽象，暂时先在此停下，查看 Rustlings 练习的相关部分后应当会有更好的理解. 阅读至这里，你应当对函数、控制流等常见的编程概念以及结构体、枚举等都有所了解，然后再继续阅读接下来的内容.
+
+如果你对于这种操作在内存处理上的疑问，不妨阅读 [Rust Book 的这个部分](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html#variables-and-data-interacting-with-move) 或者 [变量绑定背后的数据交互](https://course.rs/basic/ownership/ownership.html#%E5%8F%98%E9%87%8F%E7%BB%91%E5%AE%9A%E8%83%8C%E5%90%8E%E7%9A%84%E6%95%B0%E6%8D%AE%E4%BA%A4%E4%BA%92).
+
+## Copy Trait 实现按位复制
+
+:::tip
+如果你还不知道什么是 Trait，请跳过本段和接下来的 RAII 与 Drop 部分，当你学习了 Trait 之后再阅读它们.
+:::
+
+对于那些完全存储在栈上、不拥有堆内存资源的简单类型（如 `i32`, `bool`, `f64`, `char`），Rust 允许它们实现 `Copy` trait. 如果一个类型拥有 Copy trait，一个旧的变量在被赋值给其他变量后仍然可用.
+
+可以理解为，任何基本类型的组合可以 Copy，不需要分配内存或某种形式资源的类型是可以 Copy 的. 如果你想查阅那些基础类型是实现了 Copy trait 的，可以查阅[文档](https://doc.rust-lang.org/core/marker/trait.Copy.html#implementors).
+
+```rust
+let x = 5;
+let y = x;                      // Copy occurs here
+println!("x: {}, y: {}", x, y); // Valid!
+```
+
+`Copy` 和 `Move` 在物理操作上是完全一样的，都是栈上的位复制. 区别在于语义，实现了 `Copy` 的类型，旧变量在复制后依然被认为是有效的，因为销毁它们不需要任何特殊的清理逻辑，**没有堆内存要释放**.
+
+## RAII 与 Drop
+
+RAII (Resource Acquisition Is Initialization) 是系统编程的一种好的编程范式. 在 Rust 中，它体现为 `Drop` trait.
+
+当一个值或其拥有者，离开其作用域时，Rust 会自动调用其 `drop` 方法.
+
+```rust
+struct MyResource {
+    name: String,
+}
+
+impl Drop for MyResource {
+    fn drop(&mut self) {
+        println!("Releasing resource: {}", self.name);
+    }
+}
+
+{
+    let _r = MyResource { name: String::from("FileA") };
+    // drop _r
+}
+```
+
+ `_r` 离开作用域时，将会自动调用 `Drop::drop(&mut _r)` 来释放内部 `String`，也就是释放堆内存.
+
+在 OS 内核中，我们不仅管理内存，还管理中断、设备句柄等系统资源. `Drop` 极大方便了资源管理，而不依赖于程序员的手动 `free()` 释放.
+
+RAII 保证了**无论函数如何返回，清理逻辑都会执行**. 如果你现在还不太明白，这很正常而且也没有关系. 在完成实验后，可能你会对此理解更多.
+
+## 引用
+
+在机器码层面，引用 `&T` 和 `&mut T` 就是 C 语言中的指针，此处 `T` 为任意数据类型. 它们没有任何运行时开销.
+
+考虑如下代码：
+
+```rust
+fn main() {
+    let s1 = String::from("hello");
+    let (s2, len) = calculate_length(s1);
+    println!("The length of '{s2}' is {len}.");
+}
+
+fn calculate_length(s: String) -> (String, usize) {
+    let length = s.len(); // len() returns the length of a String
+    (s, length)
+}
+```
+
+问题在于，`s1` 被移动到了 `calculate_length` 中. 因此，我们考虑传入 `String` 值的引用. 引用类似于指针，它是一个地址，我们可以通过该地址访问存储在该地址的数据.
+
+定义一个以对象引用作为参数，而非获取值所有权的 `calculate_length` 函数：
+
+```rust
+fn main() {
+    let s1 = String::from("hello");
+    let len = calculate_length(&s1);
+    println!("The length of '{s1}' is {len}.");
+}
+
+fn calculate_length(s: &String) -> usize {
+    s.len()
+}
+```
+
+其中 `&` 符号表示引用，它们允许引用某个值而不取得其所有权.
+
+<img title="String引用" src="../../../../public/images/string.svg"></img>
+
+某些时候，你需要修改引用的值，这就需要可变引用：
+
+```rust
+fn main() {
+    let mut s = String::from("hello");
+    change(&mut s);
+}
+
+fn change(some_string: &mut String) {
+    some_string.push_str(", world");
+}
+```
+
+注意，如果你有一个值的可变引用，就不能再有其他对该值的引用. 如果对同一个值拥有不可变引用时，不能同时拥有可变引用. 这些限制此处不进行展开，可以查看 [Mutable References](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html#mutable-references).
+
+同时悬垂引用不会被编译器检查通过：
+
+```rust
+fn dangle() -> &String {
+    let s = String::from("hello");
+    &s // 返回对 s 的引用
+} // 在作用域外 s 将被释放，但我们想返回对 s 的引用.
+```
+
+总结对于引用的规则：
+
+1.  在任何给定时间，要么只能有一个可变引用 (`&mut T`)，要么有任意数量的不可变引用 (`&T`).
+2.  引用必须总是有效的.
