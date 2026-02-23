@@ -34,8 +34,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 例如对于 `let s = String::from("Rust");`，在 64 位系统上，这段代码创造了两个部分：
 
-<img title="内存布局演示" src="../../../../public/images/stack&heap.svg"></img>
-
+<img src={import.meta.env.BASE_URL + "images/stack&heap.svg"} alt="内存布局演示" />
 
 其中变量 `s` 本身位于栈上，它是一个“胖指针”结构体，包含三个 64 位字段：
 - ptr: 指向堆上实际数据的指针
@@ -149,7 +148,8 @@ fn calculate_length(s: &String) -> usize {
 
 其中 `&` 符号表示引用，它们允许引用某个值而不取得其所有权.
 
-<img title="String引用" src="../../../../public/images/string.svg"></img>
+<img src={import.meta.env.BASE_URL + "images/string.svg"} alt="String引用" />
+
 
 某些时候，你需要修改引用的值，这就需要可变引用：
 
