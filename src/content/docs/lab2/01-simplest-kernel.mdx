@@ -1,0 +1,321 @@
+---
+title: 最简的操作系统内核
+description: simplest OS kernel
+---
+
+从本章开始，我们将正式进入操作系统的实验部分. 在本章中，我们将分析实验源码，理清最小化 OS 内核和批处理系统的工作原理.
+
+## 极简的用户态执行环境
+
+一个基础的概念是，我们在学习操作系统的过程中会大量讨论内核态与用户态. 正如你在课上所学的，执行一个程序的时候，我们就在内核态与用户态之间不断进行上下文切换. 在完成实验的过程中我们会逐步加深对其的理解. 此处我们先讨论一个最简单的用户态程序.
+
+首先我们需要学习一下 QEMU 是什么，QEMU 是一种模拟器，拥有以下模式：
+
+- User mode：又称作“用户模式”，在这种模式下，QEMU 运行针对不同指令编译的单个 Linux 或 MacOS 程序. 系统调用与 32/64 位接口适应. 在这种模式下，我们可以实现交叉编译 (cross-compilation) 与交叉侦错 (cross-debugging).
+- System mode：“系统模式”，在这种模式下，QEMU模拟一个完整的计算机系统，包括外部设备. 它可以用于在一台计算机上提供多台虚拟计算机的虚拟主机. QEMU可以实现许多客户机 OS 的引导，比如 x86, MIPS, 32-bit ARMv7 等等.
+
+
+比如我们使用 `qemu-riscv64 <user_file>` 就可以运行 64 位的 RISC-V 架构的 `<user_file>` 文件，注意这里执行的是用户程序. 同理 `qemu-system-riscv64 <os_kernel>` 用来启动我们的内核，执行的是内核态的程序.
+
+在学习 C 或 C++ 语言的过程中，我们都知道 `main()` 函数是程序执行开始的入口，通过前面的学习你已经知道在 Rust 语言中也是如此. 但是你有没有想过不依赖 `main()` 函数进行执行呢？答案是肯定的.
+
+TODO: 这里添加一些关于 `_start` 的理论！
+
+实际上 Rust 编译器要找的入口函数是 `_start()` ，于是我们可以在 `main.rs` 中添加如下内容.
+
+```rust
+// os/src/main.rs
+#[no_mangle]
+extern "C" fn _start() {
+    loop{};
+}
+```
+
+这里的 `extern "C"` 的写法是一套 FFI 机制（此处添加一个文档链接），你可以理解为我们引入了 `_start` 这个符号，当我们跳转到这个符号时，就会执行 `_start() { ... }` 里面的内容.
+
+注意，如果要这么写，需要添加 `#![no_main]`. `#[no_mangle]` 以避免编译器对它的名字进行混淆，避免 `entry.asm` 找不到 `main.rs` 提供的外部符号 `rust_main` 从而导致链接失败。
+
+这里简单写一个死循环 `loop{}`，我们执行一下，发现：
+
+```shell
+$ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/os
+  段错误 (核心已转储)
+```
+
+出错了，这是因为目前的执行环境还缺了一个退出机制. 此处我们暂时不加解释地给出解决方案，在之后的篇章中我们将更详细讨论这个问题：
+
+```rust
+// os/src/main.rs
+#![feature(llvm_asm)]
+const SYSCALL_EXIT: usize = 93;
+fn syscall(id: usize, args: [usize; 3]) -> isize {
+    let mut ret: isize;
+    unsafe {
+        llvm_asm!("ecall"
+            : "={x10}" (ret)
+            : "{x10}" (args[0]), "{x11}" (args[1]), "{x12}" (args[2]), "{x17}" (id)
+            : "memory"
+            : "volatile"
+        );
+    }
+    ret
+}
+
+pub fn sys_exit(xstate: i32) -> isize {
+    syscall(SYSCALL_EXIT, [xstate as usize, 0, 0])
+}
+
+#[no_mangle]
+extern "C" fn _start() {
+    sys_exit(9);
+}
+```
+
+即可使用.
+
+```shell
+$ cargo build --target riscv64gc-unknown-none-elf
+  Compiling os v0.1.0 (/media/chyyuu/ca8c7ba6-51b7-41fc-8430-e29e31e5328f/thecode/rust/os_kernel_lab/os)
+    Finished dev [unoptimized + debuginfo] target(s) in 0.26s
+
+[$?表示执行程序的退出码，它会被告知 OS]
+$ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/os; echo $?
+9
+```
+
+正如我们在操作系统理论课上学到的，操作系统内核支持其上的用户态程序时，实际上是提供 syscall，我们刚才就实现了一个 `sys_exit`（我理解 return 0 就是 sys_exit? 这对吗？）. 类似地，我们之后也可通过实现 `sys_write` 来支持 `println!` 这类库函数.
+
+## 启动你的内核
+
+:::note
+本章的内容可能会比较抽象，如果你暂时无法理解，可以之后再回看这一部分.
+:::
+
+:::tip
+你可以使用 `git checkout` 或 `git reset` 来回到 `Initialize simplest kernel execution` 这个 commit 来查看这个极简的 OS 内核. 它暂时不包含用户态，但包括了一个内核启动的完整过程.
+:::
+
+查看 Makefile，可以看到我们执行 `qemu-system-riscv64` 来启动我们的 `${KERNEL}`：
+
+```makefile
+# kernel/Makefile
+QEMU_EXEC = qemu-system-riscv64 -machine virt \
+			-kernel ${KERNEL} \
+			-nographic \
+			-smp 1 \
+			-bios default
+```
+
+我们此处不打算讲解这些参数，在早期学习过程中不必研究过多的细节. 如果你对他们感兴趣，可以访问（文档）查看各个参数的含义.
+
+现在你很好奇，打开 `main.rs` 看了一眼，但是你看到的是：
+
+```rust
+fn main() {
+    clear_bss();
+    println!("Hello, world!");
+    panic!("Shutdown machine!");
+}
+```
+
+如你所见，并不是 `_start`，接下来我们将讨论这个看似简单的启动过程发生了什么.
+
+### 链接脚本 linker.ld 配置内存布局
+
+回忆你在计科导学习的知识，我们可以通过 **链接脚本** (Linker Script) 调整链接器的行为，使得最终生成的输出文件的内存布局符合我们的预期. 我们需要这么做的原因是，平时我们都使用操作系统帮我们管理好的内存布局，所以大部分情况下我们不需要考虑 `.data`, `.text` 这些段是怎么排布的. 但我们在开发操作系统内核时就需要自己管理这些部分.
+
+我们修改 Cargo 的配置文件来使用我们自己的链接脚本 `os/src/linker.ld` 而非使用默认的内存布局.
+
+```toml
+# os/.cargo/config.toml
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    "-Clink-arg=-Tsrc/linker.ld", "-Cforce-frame-pointers=yes"
+]
+```
+
+具体的链接脚本 `os/src/linker.ld` 如下.
+
+```
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+BASE_ADDRESS = 0x80200000;
+```
+
+第 1 行我们设置了目标平台为 riscv ；第 2 行我们设置了整个程序的入口点为之前定义的全局符号 `_start`； 第 3 行定义了一个常量 `BASE_ADDRESS` 为 `0x80200000`. 在 ch2 中，我们将程序的起始物理地址调整为 `0x80400000` ，三个应用程序都会被加载到这个物理地址上运行.
+
+```
+
+SECTIONS
+{
+    . = BASE_ADDRESS;
+    skernel = .;
+
+    stext = .;
+    .text : {
+        *(.text.entry)
+        *(.text .text.*)
+    }
+
+    . = ALIGN(4K);
+    etext = .;
+    srodata = .;
+    .rodata : {
+        *(.rodata .rodata.*)
+    }
+
+    . = ALIGN(4K);
+    erodata = .;
+    sdata = .;
+    .data : {
+        *(.data .data.*)
+    }
+
+    . = ALIGN(4K);
+    edata = .;
+    .bss : {
+        *(.bss.stack)
+        sbss = .;
+        *(.bss .bss.*)
+    }
+
+    . = ALIGN(4K);
+    ebss = .;
+    ekernel = .;
+
+    /DISCARD/ : {
+        *(.eh_frame)
+    }
+}
+```
+
+`.` 表示当前地址，同时也是当前链接脚本要管理的地址，链接器会从它指向的位置开始，往下放置一些内容. 这句话的意思是，设置当前的地址为 `ADDRESS`，从输入的目标文件中，收集来的段. 我们可以对 `.` 进行赋值来调整接下来的段放在哪里，也可以创建一些全局符号赋值为 `.` 从而记录这一时刻的位置.
+
+第 32 行，段 `.bss.stack` 被放入到可执行文件中的 `.bss` 段中的低地址中。在后面虽然有一个通配符 `.bss.*` ，但是由于链接脚本的优先匹配规则它并不会被匹配到后面去.  即**地址区间 [sbss,ebss) 并不包括栈空间**.（这一部分感觉没必要太纠结理解，只要知道有这些段和大致的排布是这样实现的就行了）
+
+对于
+
+```
+.rodata : {
+    *(.rodata)
+}
+```
+
+冒号前面表示最终生成的可执行文件的一个段的名字，花括号内按照放置顺序将所有输入目标文件的哪些段放在这个段中。每一行格式为 `<ObjectFile>(SectionName)`，表示目标文件 `ObjectFile` 的名为 `SectionName` 的段需要被放进去。我们也可以使用通配符。
+
+因此，最终的合并结果是，在最终可执行文件 中各个常见的段 `.text, .rodata .data, .bss` 从低地址到高地址按顺序放置，每个段里面都包括了所有输入目标文件的同名段， 且每个段都有两个全局符号给出了它的开始和结束地址（比如 `.text` 段的开始和结束地址分别是 `stext` 和 `etext` ）.
+
+`ALIGN` 用于实现地址对齐，内存对齐是底层操作系统的需要（？？）
+
+对链接脚本可以查询[链接脚本(Linker Scripts)语法和规则解析(自官方手册) - BSP-路人甲 - 博客园](https://www.cnblogs.com/jianhua1992/p/16852784.html).
+
+> Q: 如何做到执行环境的初始化代码被放在内存上以 `0x80200000` 开头的区域上？
+>
+> A: 从`0x80200000`开始，第一个被放置的 是 `.text` ，而里面第一个被放置的又是来自 `entry.asm` 中的段 `.text.entry`，这个段恰恰是含有两条指令的执行环境初始化代码， 它在所有段中最早被放置在我们期望的 `0x80200000` 处.
+
+### 汇编配置栈空间布局
+
+除此之外我们还需要设置栈空间.
+
+因为我们还没有设置栈空间，所以我们的程序还不足以运行（为什么？）。我们需要有一段代码来分配并栈空间，并把 `sp` 寄存器指向栈空间的起始位置。注意，栈空间是从上向下 `push` 数据的。
+
+<img src="https://www.ruanyifeng.com/blogimg/asset/2018/bg2018012215.png" alt="栈空间" style="zoom:67%;" />
+
+```assembly
+# os/src/entry.asm
+	.section .text.entry
+    .globl _start
+_start:
+    la sp, boot_stack_top  
+    call {rust_main} 
+
+    .section .bss.stack
+    .globl boot_stack_lower_bound
+boot_stack_lower_bound:
+    .space {boot_stack_size}
+    .globl boot_stack_top
+boot_stack_top:
+```
+
+:::note
+本次实验中，你只需要会阅读链接脚本和 RISC-V 汇编即可. 有更高需求的同学可以尝试自行修改.
+:::
+
+`_start` 的这一段汇编代码放在 `.text` 段的 `.entry` 处（回忆之前我们的链接脚本），`boot_stack_lower_bound` 和 `boot_stack_top` 被放在 `.bss` 段的 `.stack` 处.
+
+栈空间的栈顶地址被全局符号 `boot_stack_top` 标识，栈底则被全局符号 `boot_stack` 标识.
+
+当我们使用 `mod boot` 时，就会触发 `global_asm!` 嵌入全局汇编代码. 
+
+我觉得这段写的不好，但是先这样，之后再改改.
+
+### 清空 .bss 段
+
+一般的应用程序的 `.bss` 段，在程序开始运行之前会被执环境（系统库或操作系统内核）固定初始化为零。在 ELF 文件中，为了节省磁盘空间，只会记录 `.bss` 段的位置。且应用程序的假定在它执行前，其 `.bss`段 的数据内容都已全是0.
+
+（这里修改 .bss 段的理论）
+
+```rust
+// os/src/main.rs
+pub fn clear_bss() {
+    unsafe extern "C" {
+        unsafe fn sbss();
+        unsafe fn ebss();
+    }
+    (sbss as usize..ebss as usize).for_each(|a| unsafe { (a as *mut u8).write_volatile(0) });
+}
+```
+
+在程序内自己进行清零的时候，我们就不用去解析 ELF，而是通过链接脚本 `linker.ld` 中给出的全局符号 `sbss` 和 `ebss` 来确定 `.bss` 段的位置.
+
+
+## 实现 println!
+
+RISCV的各个特权级，M级。。。
+
+然后我们需要了解 SBI，它是 RISC-V 的一种底层规范，操作系统内核可直接调用 SBI 提供的底层功能，如关机、显示字符串等.
+
+（一张图）
+
+应用程序访问操作系统提供的系统调用的指令是 `ecall` ，操作系统获取 SBI 服务的 SBI 调用的指令也是 `ecall` （操作系统和SBI的关系？？？这里写的对吗？？？）. 此处我们使用的是 QEMU 自带的 OpenSBI，OpenSBI 位于完全掌控机器的机器特权级（Machine Mode），通过 `ecall` 指令，可以完成从弱特权级到强特权级的转换.
+
+```rust
+// kernel/src/sbi.rs
+fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {
+    let mut ret;
+    unsafe {
+        asm!(
+            "ecall",     // sbi call
+            inlateout("x10") arg0 => ret, // sbi call arg0 and return value
+            in("x11") arg1, // sbi call arg1
+            in("x12") arg2, // sbi call arg2
+            in("x16") 0, // for sbi call id args need 2 reg (x16, x17)
+            in("x17") which,// sbi call id
+        );
+    }
+    ret
+}
+```
+
+```rust
+use crate::utils::sbi::console_putchar;
+
+struct Stdout;
+
+impl Write for Stdout {
+    /// write str to console
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            console_putchar(c as usize);
+        }
+        Ok(())
+    }
+}
+```
+
+我们通过调用 SBI 逐步实现了 Hello, world! 的输出.
+
+(这里可能需要展开讲讲？)
