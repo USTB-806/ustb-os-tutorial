@@ -29,7 +29,7 @@ description: simplest OS kernel
 现在你知道了 Rust 编译器要找的入口函数是 `_start()` ，于是我们可以在 `main.rs` 中添加如下内容.
 
 ```rust
-// os/src/main.rs
+// kernel/src/main.rs
 #[no_mangle]
 extern "C" fn _start() {
     loop{};
@@ -43,24 +43,23 @@ extern "C" fn _start() {
 这里简单写一个死循环 `loop{}`，我们执行一下，发现：
 
 ```shell
-$ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/os
+$ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/kernel
   段错误 (核心已转储)
 ```
 
 出错了，这是因为目前的执行环境还缺了一个退出机制. 此处我们暂时不加解释地给出解决方案，在之后的篇章中我们将更详细讨论这个问题：
 
 ```rust
-// os/src/main.rs
-#![feature(llvm_asm)]
-const SYSCALL_EXIT: usize = 93;
-fn syscall(id: usize, args: [usize; 3]) -> isize {
+// kernel/src/main.rs
+pub fn syscall(id: usize, args: [usize; 3]) -> isize {
     let mut ret: isize;
     unsafe {
-        llvm_asm!("ecall"
-            : "={x10}" (ret)
-            : "{x10}" (args[0]), "{x11}" (args[1]), "{x12}" (args[2]), "{x17}" (id)
-            : "memory"
-            : "volatile"
+        core::arch::asm!(
+            "ecall",
+            inlateout("x10") args[0] => ret,
+            in("x11") args[1],
+            in("x12") args[2],
+            in("x17") id
         );
     }
     ret
@@ -72,21 +71,18 @@ pub fn sys_exit(xstate: i32) -> isize {
 
 #[no_mangle]
 extern "C" fn _start() {
-    sys_exit(9);
+    sys_exit(9); // sigkill
 }
 ```
 
 即可使用.
 
 ```shell
-$ cargo build --target riscv64gc-unknown-none-elf
-  Compiling os v0.1.0 (/media/chyyuu/ca8c7ba6-51b7-41fc-8430-e29e31e5328f/thecode/rust/os_kernel_lab/os)
-    Finished dev [unoptimized + debuginfo] target(s) in 0.26s
-
-[$?表示执行程序的退出码，它会被告知 OS]
-$ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/os; echo $?
+$ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/kernel; echo $?
 9
 ```
+
+`$?` 表示执行程序的退出码.
 
 正如我们在操作系统理论课上学到的，操作系统内核支持其上的用户态程序时，本质上是通过系统调用 (syscall) 提供服务。这里我们实现的是 `sys_exit`.
 
@@ -95,7 +91,7 @@ $ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/os; echo $?
 ## 启动你的内核
 
 :::note
-本章的内容可能会比较抽象，如果你暂时无法理解，可以之后再回看这一部分.
+本节的内容可能会比较抽象，如果你暂时无法理解，可以之后再回看这一部分.
 :::
 
 :::tip
@@ -131,12 +127,16 @@ fn main() {
 
 ### 链接脚本 linker.ld 配置内存布局
 
+:::note
+本次实验中，你只需要会阅读链接脚本和 RISC-V 汇编即可. 有更高需求的同学可以尝试自行修改.
+:::
+
 回忆你在计科导学习的知识，我们可以通过 **链接脚本** (Linker Script) 调整链接器的行为，使得最终生成的输出文件的内存布局符合我们的预期. 我们需要这么做的原因是，平时我们都使用操作系统帮我们管理好的内存布局，所以大部分情况下我们不需要考虑 `.data`, `.text` 这些段是怎么排布的. 但我们在开发操作系统内核时就需要自己管理这些部分.
 
-我们修改 Cargo 的配置文件来使用我们自己的链接脚本 `os/src/linker.ld` 而非使用默认的内存布局.
+我们修改 Cargo 的配置文件来使用我们自己的链接脚本 `kernel/src/linker.ld` 而非使用默认的[内存布局](../02-function-and-memory/#程序内存布局).
 
 ```toml
-# os/.cargo/config.toml
+# kernel/.cargo/config.toml
 [build]
 target = "riscv64gc-unknown-none-elf"
 
@@ -146,7 +146,7 @@ rustflags = [
 ]
 ```
 
-具体的链接脚本 `os/src/linker.ld` 如下.
+具体的链接脚本 `kernel/src/linker.ld` 如下.
 
 ```
 OUTPUT_ARCH(riscv)
@@ -154,10 +154,9 @@ ENTRY(_start)
 BASE_ADDRESS = 0x80200000;
 ```
 
-第 1 行我们设置了目标平台为 riscv ；第 2 行我们设置了整个程序的入口点为之前定义的全局符号 `_start`； 第 3 行定义了一个常量 `BASE_ADDRESS` 为 `0x80200000`. 在 ch2 中，我们将程序的起始物理地址调整为 `0x80400000` ，三个应用程序都会被加载到这个物理地址上运行.
+我们设置了目标平台为 RISC-V，整个程序的入口点为之前定义的全局符号 `_start`；之后定义了一个常量 `BASE_ADDRESS` 为 `0x80200000`.
 
 ```
-
 SECTIONS
 {
     . = BASE_ADDRESS;
@@ -201,21 +200,21 @@ SECTIONS
 }
 ```
 
-`.` 表示当前地址，同时也是当前链接脚本要管理的地址，链接器会从它指向的位置开始，往下放置一些内容. 这句话的意思是，设置当前的地址为 `ADDRESS`，从输入的目标文件中，收集来的段. 我们可以对 `.` 进行赋值来调整接下来的段放在哪里，也可以创建一些全局符号赋值为 `.` 从而记录这一时刻的位置.
-
-第 32 行，段 `.bss.stack` 被放入到可执行文件中的 `.bss` 段中的低地址中。在后面虽然有一个通配符 `.bss.*` ，但是由于链接脚本的优先匹配规则它并不会被匹配到后面去.  即**地址区间 [sbss,ebss) 并不包括栈空间**.（这一部分感觉没必要太纠结理解，只要知道有这些段和大致的排布是这样实现的就行了）
-
-对于
+冒号前面表示最终生成的可执行文件的一个段的名字，花括号内按照放置顺序将所有输入目标文件的哪些段放在这个段中。符号 `.` 表示当前地址，同时也是当前链接脚本要管理的地址，链接器会从它指向的位置开始，往下放置一些内容。也就是说，设置当前的地址为 `ADDRESS`，从输入的目标文件中，收集来的段。我们可以对 `.` 进行赋值来调整接下来的段放在哪里，也可以创建一些全局符号赋值为 `.` 从而记录这一时刻的位置。
 
 ```
-.rodata : {
-    *(.rodata)
+. = ALIGN(4K);
+edata = .;
+.bss : {
+    *(.bss.stack)
+    sbss = .;
+    *(.bss .bss.*)
 }
 ```
 
-冒号前面表示最终生成的可执行文件的一个段的名字，花括号内按照放置顺序将所有输入目标文件的哪些段放在这个段中。每一行格式为 `<ObjectFile>(SectionName)`，表示目标文件 `ObjectFile` 的名为 `SectionName` 的段需要被放进去。我们也可以使用通配符。
+段 `.bss.stack` 被放入到可执行文件中的 `.bss` 段中的低地址中，在后面虽然有一个通配符 `.bss.*` ，但是由于链接脚本的优先匹配规则它并不会被匹配到后面去.  即**地址区间 [sbss,ebss) 并不包括栈空间**.
 
-因此，最终的合并结果是，在最终可执行文件 中各个常见的段 `.text, .rodata .data, .bss` 从低地址到高地址按顺序放置，每个段里面都包括了所有输入目标文件的同名段， 且每个段都有两个全局符号给出了它的开始和结束地址（比如 `.text` 段的开始和结束地址分别是 `stext` 和 `etext` ）.
+因此，最终的合并结果是，在最终可执行文件中各个常见的段 `.text, .rodata .data, .bss` 从低地址到高地址按顺序放置，每个段里面都包括了所有输入目标文件的同名段， 且每个段都有两个全局符号给出了它的开始和结束地址 (比如 `.text` 段的开始和结束地址分别是 `stext` 和 `etext` ).
 
 `ALIGN` 用于实现地址对齐. 对齐的主要收益是：
 
@@ -223,23 +222,21 @@ SECTIONS
 - 减少跨页/跨缓存行访问带来的额外开销；
 - 让页表映射、段权限管理等后续机制更规整.
 
-对链接脚本可以查询[链接脚本(Linker Scripts)语法和规则解析(自官方手册) - BSP-路人甲 - 博客园](https://www.cnblogs.com/jianhua1992/p/16852784.html).
-
-> Q: 如何做到执行环境的初始化代码被放在内存上以 `0x80200000` 开头的区域上？
->
-> A: 从`0x80200000`开始，第一个被放置的 是 `.text` ，而里面第一个被放置的又是来自 `entry.asm` 中的段 `.text.entry`，这个段恰恰是含有两条指令的执行环境初始化代码， 它在所有段中最早被放置在我们期望的 `0x80200000` 处.
+对链接脚本可以查询[官方文档](https://sourceware.org/binutils/docs/ld/Scripts.html).
 
 ### 汇编配置栈空间布局
 
 除此之外我们还需要设置栈空间.
 
-如果不先设置栈空间，函数调用、局部变量、保存返回地址等操作都无法正确工作，因为它们依赖 `sp` 指向一段有效内存。我们需要在启动阶段分配一段栈，并把 `sp` 设置到栈顶。注意，RISC-V 的栈从高地址向低地址增长。
+如果不先设置栈空间，函数调用、局部变量、保存返回地址等操作都无法正确工作，因为它们依赖 `sp` 指向一段有效内存。我们需要在启动阶段分配一段栈，并把 `sp` 设置到栈顶。注意，RISC-V 的栈从高地址向低地址增长.
 
-<img src="https://www.ruanyifeng.com/blogimg/asset/2018/bg2018012215.png" alt="栈空间" style="zoom:67%;" />
+```rust
+// kernel/src/boot.rs
+global_asm!(include_str!("link_app.S"));
 
-```asm
-# os/src/entry.asm
-	.section .text.entry
+global_asm!(
+    r#"
+    .section .text.entry
     .globl _start
 _start:
     la sp, boot_stack_top  
@@ -251,11 +248,11 @@ boot_stack_lower_bound:
     .space {boot_stack_size}
     .globl boot_stack_top
 boot_stack_top:
+    "#,
+    boot_stack_size = const BOOT_STACK_SIZE,
+    rust_main = sym super::main,
+);
 ```
-
-:::note
-本次实验中，你只需要会阅读链接脚本和 RISC-V 汇编即可. 有更高需求的同学可以尝试自行修改.
-:::
 
 `_start` 的这一段汇编代码放在 `.text` 段的 `.entry` 处（回忆之前我们的链接脚本），`boot_stack_lower_bound` 和 `boot_stack_top` 被放在 `.bss` 段的 `.stack` 处.
 
@@ -263,14 +260,20 @@ boot_stack_top:
 
 当我们使用 `mod boot` 时，就会触发 `global_asm!` 嵌入全局汇编代码. 
 
+:::note
+Q: 如何做到执行环境的初始化代码被放在内存上以 `0x80200000` 开头的区域上？
+
+A: 从`0x80200000`开始，第一个被放置的 是 `.text` ，而里面第一个被放置的又是来自 `boot.rs` 中的段 `.text.entry`，这个段恰恰是含有两条指令 (`la` 和 `call`) 的执行环境初始化代码，它在所有段中最早被放置在我们期望的 `0x80200000` 处. 初始化代码 `boot.rs` 由此和链接脚本联系起来. 所以这意味着，当进入 OS 内核后，会先执行 `.text.entry` 段的内容，也就是这两条指令.
+:::
+
 ### 清空 .bss 段
 
-一般的应用程序的 `.bss` 段，在程序开始运行之前会被执环境（系统库或操作系统内核）固定初始化为零。在 ELF 文件中，为了节省磁盘空间，只会记录 `.bss` 段的位置。且应用程序的假定在它执行前，其 `.bss`段 的数据内容都已全是0.
+一般的应用程序的 [`.bss`](https://en.wikipedia.org/wiki/.bss) 段，在程序开始运行之前会被执环境（系统库或操作系统内核）固定初始化为零. 在 ELF 文件中，为了节省磁盘空间，只会记录 `.bss` 段的位置. 且应用程序的假定在它执行前，其 `.bss`段 的数据内容都已全是0.
 
-在裸机内核中，这一步通常需要我们自己完成：启动后尽早把 `.bss` 全部清零。否则，未初始化静态变量会带着随机值运行，导致非常隐蔽的错误。
+在裸机内核中，这一步通常需要我们自己完成：启动后尽早把 `.bss` 全部清零. 否则，未初始化静态变量会带着随机值运行，导致非常隐蔽的错误.
 
 ```rust
-// os/src/main.rs
+// kernel/src/main.rs
 pub fn clear_bss() {
     unsafe extern "C" {
         unsafe fn sbss();
@@ -282,22 +285,23 @@ pub fn clear_bss() {
 
 在程序内自己进行清零的时候，我们就不用去解析 ELF，而是通过链接脚本 `linker.ld` 中给出的全局符号 `sbss` 和 `ebss` 来确定 `.bss` 段的位置.
 
-
 ## 实现 println!
 
-在前面的启动阶段，我们已经完成了入口、栈和 `.bss` 的初始化。接下来要解决一个实际问题：如何在没有标准输出设备驱动的情况下打印信息。
+在前面的启动阶段，我们已经完成了入口、栈和 `.bss` 的初始化. 接下来要解决一个实际问题：如何在没有标准输出设备驱动的情况下打印信息.
 
-这里需要引入 SBI（Supervisor Binary Interface）。它是 S 模式内核与更高特权级执行环境（通常是 M 模式的 OpenSBI）之间的二进制接口。内核可以通过 SBI 请求底层服务，例如字符输出、关机等。
+RISC-V 定义了这三种特权模式 (实际上是四种，此处我们介绍三种)，构成其安全和操作系统支持的框架：M-mode（Machine，机器模式）是最高权限，直接控制硬件；S-mode（Supervisor，监督模式）用于运行操作系统内核；U-mode（User，用户模式）用于运行应用程序.
 
-在这套分层里，应用程序通过 syscall 向内核请求服务；而内核通过 SBI 向 OpenSBI 请求更底层服务。两者都可能使用 `ecall` 指令触发陷入，但语义和服务提供者不同：
+这里需要引入 SBI (Supervisor Binary Interface). 它是 S 模式内核与更高特权级执行环境 (通常是 M 模式的 OpenSBI) 之间的二进制接口. 内核可以通过 SBI 请求底层服务，例如字符输出、关机等.
+
+在这套分层里，应用程序通过 syscall 向内核请求服务；而内核通过 SBI 向 OpenSBI 请求更底层服务. 两者都可能使用 `ecall` 指令触发陷入，但语义和服务提供者不同：
 
 - U -> S：应用程序调用内核 ABI；
 - S -> M：内核调用 SBI.
 
-本实验使用的是 QEMU 自带的 OpenSBI。OpenSBI 运行在 M 模式，内核运行在 S 模式，因此内核执行 SBI `ecall` 后会进入更高特权级执行，完成请求后再返回。
+本实验使用的是 QEMU 自带的 OpenSBI. OpenSBI 运行在 M 模式，内核运行在 S 模式，因此内核执行 SBI `ecall` 后会进入更高特权级执行，完成请求后再返回.
 
 ```rust
-// kernel/src/sbi.rs
+// kernel/src/utils/sbi.rs
 fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {
     let mut ret;
     unsafe {
@@ -315,6 +319,7 @@ fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {
 ```
 
 ```rust
+// kernel/src/utils/console.rs
 use crate::utils::sbi::console_putchar;
 
 struct Stdout;
@@ -332,4 +337,4 @@ impl Write for Stdout {
 
 我们通过调用 SBI 逐步实现了 Hello, world! 的输出.
 
-从实现路径看，`println!` 最终会走到 `core::fmt::Write` 的 `write_str`，而 `write_str` 再逐字符调用 `console_putchar`，后者通过 SBI 把字符送到串口设备。也就是说，`println!` 并不是“直接会打印”，而是依赖了我们自己搭建的格式化输出链路。
+从实现路径看，`println!` 最终会走到 `core::fmt::Write` 的 `write_str`，而 `write_str` 再逐字符调用 `console_putchar`，后者通过 SBI 把字符送到串口设备. 也就是说，`println!` 依赖了我们自己搭建的格式化输出链路.
