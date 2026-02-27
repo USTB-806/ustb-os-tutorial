@@ -3,8 +3,6 @@ title: 批处理系统
 description: batching
 ---
 
-这里有一个巨大的问题，我把elf loader本身当作黑盒，没什么错。但是现在得到的都是二进制文件，我竟然还能直接使用 elf loader吗？我去。我需要检查这个部分。
-
 ### 应用程序构建
 
 #### 项目结构
@@ -61,7 +59,7 @@ fn main() -> i32 {
 #### 系统调用
 
 <a id="syscall"></a>
-在系统调用时，我们需要将对应的参数储存在寄存器中，我们需要了解RISC-V架构中寄存器的相关知识[RISV-V架构的寄存器介绍_riscv寄存器-CSDN博客](https://blog.csdn.net/weixin_42031299/article/details/132839814).
+在系统调用时，我们需要将参数按 ABI 约定放入寄存器，因此需要先了解 RISC-V 的调用约定与寄存器分工.
 
 在 `syscall` 中，应用程序来通过 `ecall` 调用批处理系统提供的接口，由于应用程序运行在 U 模式， `ecall` 指令会触发名为 `Environment call from U-mode` 的<u>异常</u>，并 Trap 进入 S 模式.
 
@@ -87,7 +85,7 @@ fn sys_exit(xstate: usize) -> !;
 
 <a id="a7"></a>
 
-约定寄存器 `a0~a6` 保存系统调用的参数， `a0~a1` 保存系统调用的**返回值**。寄存器 `a7` 用来传递 **syscall ID**，这是因为所有的 syscall 都是通过 `ecall` 指令触发的，除了各输入参数之外我们还额外需要一个寄存器，保存要请求哪个系统调用。
+约定寄存器 `a0~a6` 可用于保存系统调用参数，`a0~a1` 保存系统调用**返回值**。寄存器 `a7` 用来传递 **syscall ID**. 因为所有 syscall 都通过 `ecall` 触发，所以除了参数之外还需要一个寄存器标识“请求哪一个系统调用”.
 
 由于这超出了 Rust 语言的表达能力，我们需要在代码中使用内嵌汇编来完成参数/返回值绑定和 `ecall` 指令的插入.
 
@@ -167,12 +165,12 @@ pub fn exit(exit_code: i32) -> isize { sys_exit(exit_code) }
 - 应用程序不能访问任意的地址空间（ch4）
 - 应用程序不能执行某些可能破环计算机系统的指令（本章 ch2）
 
-处理器设置两个不同安全等级的执行环境，用户态特权级和内核态特权级。指出可能破会计算机系统的内核态特权级的指令子集，规定其只能在内核态特权级的执行环境中执行，如果在用户态特权级的环境执行这些指令，会产生异常。
+处理器设置不同安全等级的执行环境 (用户态与内核态). 对于可能破坏系统状态的指令，硬件规定其只能在高特权级执行；若在低特权级执行，会触发异常并交给内核处理.
 
-为了让应用程序获得操作系统的函数服务，采用传统的函数调用方式（即通常的 `call` 和 `ret` 指令或指令组合）将会直接绕过硬件的特权级保护检查。所以要设计新的指令：**执行环境调用**(Execution Environment Call，简称 `ecall` )和**执行环境返回**(Execution Environment Return，简称 `eret` )：
+为了让应用程序安全地获得内核服务，不能直接使用普通 `call/ret` 跨特权级调用，否则会绕过硬件保护. 因此需要使用**陷入**和**返回**机制：
 
-- `ecall` ：具有**用户态到内核态**的执行环境切换能力的，函数调用指令（RISC-V中就有这条指令）
-- `eret` ：具有内核态到用户态的执行环境切换能力的，函数返回指令（RISC-V中有类似的 `sret` 指令）
+- `ecall`：触发执行环境调用，从低特权级陷入高特权级处理流程；
+- `sret`：在 RISC-V S 模式下用于从内核返回到先前特权级（通常是 U 模式）。
 
 操作系统需要提供相应的控制流，能在执行 `eret` 前，**恢复用户态**执行应用程序的上下文。其次，在应用程序调用 `ecall` 指令后，能够**保存用户态**应用程序的上下文。
 
@@ -231,13 +229,13 @@ RISC-V 中的 S 模式特权指令：
 | 指令               | 含义                                                         |
 | ------------------ | ------------------------------------------------------------ |
 | sret               | 从S模式返回U模式。在U模式下执行会产生非法指令异常            |
-| wfi                | 处理器在空闲时进入低功耗状态等待中断。在U模式下执行会尝试非法指令异常 |
-| sfence.vma         | 刷新TLB缓存。在U模式下执行会尝试非法指令异常                 |
-| 访问S模式CSR的指令 | 通过访问 [sepc/stvec/scause/sscartch/stval/sstatus/satp等CSR](https://rcore-os.gitcode.host/rCore-Tutorial-Book-v3/chapter2/4trap-handling.html#term-s-mod-csr) 来改变系统状态。在U模式下执行会尝试非法指令异常 |
+| wfi                | 处理器在空闲时进入低功耗状态等待中断。在U模式下执行会触发非法指令异常 |
+| sfence.vma         | 刷新TLB缓存。在U模式下执行会触发非法指令异常                 |
+| 访问S模式CSR的指令 | 通过访问 [sepc/stvec/scause/sscratch/stval/sstatus/satp等CSR](https://rcore-os.gitcode.host/rCore-Tutorial-Book-v3/chapter2/4trap-handling.html#term-s-mod-csr) 来改变系统状态。在U模式下执行会触发非法指令异常 |
 
 ### 批处理系统实现
 
-TL; DR，这部分描述的是如何操作系统如何执行我们之前写的用户程序的部分。
+这一部分描述批处理系统如何加载并执行前面构建的用户程序。
 
 #### 应用程序链接至内核
 
@@ -253,7 +251,7 @@ core::arch::global_asm!(include_str!("link_app.S"));
 
 汇编代码 `link_app.S` 一开始并不存在，而是在`make run`构建的时候自动生成的.
 
-```assembly
+```asm
 # os/src/link_app.S
 
     .align 3
@@ -296,9 +294,9 @@ app_2_end:
 
 其中`_num_app`段相当于一个64位整数数组，第一个元素表示应用程序数量，之后是各个应用的起始地址，最后是最后一个程序的结束位置，这样应用程序的位置都能从该数组中相邻两个元素中得知。
 
-> Q：`.data`段是连续的吗？
+> Q：`.data` 段是连续的吗？
 >
-> A：每个应用程序的数据部分没有显式地分配新的段（即没有使用 `.section` 和 `.text` 之间的切换），故它们的内存分布是 **连续的**。事实上，多个 `.section .data` 和 `.global` 指令只是在一个单一的数据段内逐个声明不同的符号，因此它们共享同一个数据段，它们之间的数据是 **按顺序排列** 的。
+> A：在这个生成文件中，多个 `.section .data` 最终仍会归并到同名段里，符号按汇编输出顺序布局。因此我们可以把这批数据看作同一段中的连续区域，并通过符号地址计算每个应用的边界。
 
 #### Rust应用加载与AppManager
 
@@ -365,7 +363,7 @@ lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 
 > 一般情况下，全局变量必须在编译期设置一个初始值，但是有些全局变量依赖于运行期间才能得到的数据作为初始值。这导致这些全局变量需要在运行时发生变化，也即重新设置初始值之后才能使用。
 >
->  `lazy_static!` 宏提供了全局变量的运行时初始化功能。借助 Rust 核心库提供的 `RefCell` 和外部库 `lazy_static!`，我们就能在避免 `static mut` 声明的情况下以更加优雅的Rust风格使用全局变量。
+> `lazy_static!` 宏提供了全局变量的运行时初始化能力。借助 `UPSafeCell`/`RefCell` 这类内部可变性容器，我们就能在尽量避免 `static mut` 的前提下管理全局状态。
 
 在`AppManager`方法中，
 
@@ -411,7 +409,7 @@ unsafe fn load_app(&self, app_id: usize) {
 
 通常情况下， CPU 会认为程序的代码段不会发生变化，因此 i-cache 是一种**只读缓存**。但在这里，我们会修改会被 CPU 取指的内存区域，这会使得 i-cache 中含有与内存中不一致的内容。因此我们这里必须使用 `fence.i` 指令手动清空 i-cache ，让里面所有的内容全部失效， 才能够保证正确性。
 
-> 此处待补充，需要更清晰的理解。另外，在OSCamp的rCore-v3文档中，没用`fence.i`的相关内容。
+> 为什么这里需要 `fence.i`：我们刚把新的应用指令拷贝到 `0x80400000`，但 CPU 的 i-cache 里可能仍缓存旧内容。`fence.i` 会让后续取指看到最新内存内容，避免“代码已写入但仍执行旧指令”的问题。
 
 `batch` 子模块对外暴露出两个接口，`init` 和`run_next_app`.
 
@@ -529,7 +527,7 @@ pub fn init() {
 
 我们在 `os/src/trap/trap.S` 中实现 Trap 上下文保存/恢复的汇编代码，分别用外部符号 `__alltraps` 和 `__restore` 标记，并将这段汇编代码中插入进来。
 
-```assembly
+```asm
 # os/src/trap/trap.S
 .macro SAVE_GP n
     sd x\n, \n*8(sp)
@@ -585,7 +583,7 @@ __alltraps:
 
 当 `trap_handler` 返回之后会从调用 `trap_handler` 的下一条指令开始执行，也就是从栈上的 Trap 上下文恢复的 `__restore` ：
 
-```assembly
+```asm
 .macro LOAD_GP n
     ld x\n, \n*8(sp)
 .endm
@@ -621,7 +619,7 @@ __restore:
 
 Trap 处理的总体流程如下：首先通过 `__alltraps` **将 Trap 上下文保存在内核栈上**，然后跳转到使用 Rust 编写的 `trap_handler` 函数 完成 Trap 分发及处理。当 `trap_handler` 返回之后，使用 `__restore` 从保存在内核栈上的 Trap 上下文**恢复寄存器**。最后通过一条 `sret` 指令回到应用程序执行。
 
-##### trap_hander
+##### trap_handler
 
 ```rust
 // os/src/trap/mod.rs

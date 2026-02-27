@@ -14,14 +14,19 @@ description: simplest OS kernel
 - User mode：又称作“用户模式”，在这种模式下，QEMU 运行针对不同指令编译的单个 Linux 或 MacOS 程序. 系统调用与 32/64 位接口适应. 在这种模式下，我们可以实现交叉编译 (cross-compilation) 与交叉侦错 (cross-debugging).
 - System mode：“系统模式”，在这种模式下，QEMU模拟一个完整的计算机系统，包括外部设备. 它可以用于在一台计算机上提供多台虚拟计算机的虚拟主机. QEMU可以实现许多客户机 OS 的引导，比如 x86, MIPS, 32-bit ARMv7 等等.
 
-
 比如我们使用 `qemu-riscv64 <user_file>` 就可以运行 64 位的 RISC-V 架构的 `<user_file>` 文件，注意这里执行的是用户程序. 同理 `qemu-system-riscv64 <os_kernel>` 用来启动我们的内核，执行的是内核态的程序.
 
 在学习 C 或 C++ 语言的过程中，我们都知道 `main()` 函数是程序执行开始的入口，通过前面的学习你已经知道在 Rust 语言中也是如此. 但是你有没有想过不依赖 `main()` 函数进行执行呢？答案是肯定的.
 
-TODO: 这里添加一些关于 `_start` 的理论！
+严格来说，`main` 只是高级语言层面的“约定入口”. 真正被 CPU 跳转到的入口地址来自可执行文件头 (例如 [ELF](https://www.reddit.com/r/linuxquestions/comments/17rhr8v/how_would_you_explain_the_linux_elf_format_to_a/) 的入口地址字段) 以及链接脚本中的 `ENTRY` 设置. 
 
-实际上 Rust 编译器要找的入口函数是 `_start()` ，于是我们可以在 `main.rs` 中添加如下内容.
+操作系统内核处于硬件与应用程序之间的底层环境 (裸机)，而不是基于现有的操作系统来支撑标准库中的线程、文件 I/O、堆内存管理等抽象功能. 所以对内核这类没有标准库 `no_std` 程序而言，我们通常不走语言运行时 (runtime) 的标准启动流程，而是直接定义一个裸入口 `_start`：
+
+- 它是链接器和启动汇编约定使用的符号.
+- 它负责完成最早期初始化 (栈、`.bss` 清零、跳转 Rust 主逻辑等).
+- 它不依赖标准库，因此可用于裸机执行环境.
+
+现在你知道了 Rust 编译器要找的入口函数是 `_start()` ，于是我们可以在 `main.rs` 中添加如下内容.
 
 ```rust
 // os/src/main.rs
@@ -31,9 +36,9 @@ extern "C" fn _start() {
 }
 ```
 
-这里的 `extern "C"` 的写法是一套 FFI 机制（此处添加一个文档链接），你可以理解为我们引入了 `_start` 这个符号，当我们跳转到这个符号时，就会执行 `_start() { ... }` 里面的内容.
+这里的 `extern "C"` 起到 FFI 的作用，将 Rust 的 ABI 转换为 C 的 [ABI](https://slightknack.github.io/rust-abi-wiki/intro/what_is_an_ABI.html). 采用 C ABI 约定，以便于与汇编入口和链接器符号对接. 你可以理解为我们显式导出 `_start` 这个符号，当控制流跳转到该符号时，就会执行 `_start() { ... }` 中的逻辑.
 
-注意，如果要这么写，需要添加 `#![no_main]`. `#[no_mangle]` 以避免编译器对它的名字进行混淆，避免 `entry.asm` 找不到 `main.rs` 提供的外部符号 `rust_main` 从而导致链接失败。
+注意，如果要这么写，需要添加 `#![no_main]`，告诉编译器不要生成默认入口. `#[no_mangle]` 则用于禁止符号名改写，确保最终产物里确实存在名为 `_start` 的符号，供链接器与启动代码准确定位.
 
 这里简单写一个死循环 `loop{}`，我们执行一下，发现：
 
@@ -83,7 +88,9 @@ $ qemu-riscv64 target/riscv64gc-unknown-none-elf/debug/os; echo $?
 9
 ```
 
-正如我们在操作系统理论课上学到的，操作系统内核支持其上的用户态程序时，实际上是提供 syscall，我们刚才就实现了一个 `sys_exit`（我理解 return 0 就是 sys_exit? 这对吗？）. 类似地，我们之后也可通过实现 `sys_write` 来支持 `println!` 这类库函数.
+正如我们在操作系统理论课上学到的，操作系统内核支持其上的用户态程序时，本质上是通过系统调用 (syscall) 提供服务。这里我们实现的是 `sys_exit`.
+
+这里也可以顺便回答一个常见疑问：`return 0` 与 `sys_exit(0)` 在“效果”上通常等价，因为语言运行时最终也会调用退出系统调用；但在裸机/无标准运行时场景中，我们往往需要自己显式完成这一步.
 
 ## 启动你的内核
 
@@ -106,7 +113,9 @@ QEMU_EXEC = qemu-system-riscv64 -machine virt \
 			-bios default
 ```
 
-我们此处不打算讲解这些参数，在早期学习过程中不必研究过多的细节. 如果你对他们感兴趣，可以访问（文档）查看各个参数的含义.
+我们此处不打算展开所有参数细节，在早期学习过程中不必一次性掌握太多. 若你想深入，可查阅 [QEMU 官方文档](https://www.qemu.org/docs/master/system/introduction.html#running)了解每个参数的含义.
+
+其中最关键的是：`-kernel` 指定内核镜像，`-machine virt` 选择 QEMU 提供的 RISC-V 虚拟开发板模型，`-nographic` 让串口输出直接显示在当前终端.
 
 现在你很好奇，打开 `main.rs` 看了一眼，但是你看到的是：
 
@@ -208,7 +217,11 @@ SECTIONS
 
 因此，最终的合并结果是，在最终可执行文件 中各个常见的段 `.text, .rodata .data, .bss` 从低地址到高地址按顺序放置，每个段里面都包括了所有输入目标文件的同名段， 且每个段都有两个全局符号给出了它的开始和结束地址（比如 `.text` 段的开始和结束地址分别是 `stext` 和 `etext` ）.
 
-`ALIGN` 用于实现地址对齐，内存对齐是底层操作系统的需要（？？）
+`ALIGN` 用于实现地址对齐. 对齐的主要收益是：
+
+- 满足硬件或 ABI 对某些数据/段边界的要求；
+- 减少跨页/跨缓存行访问带来的额外开销；
+- 让页表映射、段权限管理等后续机制更规整.
 
 对链接脚本可以查询[链接脚本(Linker Scripts)语法和规则解析(自官方手册) - BSP-路人甲 - 博客园](https://www.cnblogs.com/jianhua1992/p/16852784.html).
 
@@ -220,11 +233,11 @@ SECTIONS
 
 除此之外我们还需要设置栈空间.
 
-因为我们还没有设置栈空间，所以我们的程序还不足以运行（为什么？）。我们需要有一段代码来分配并栈空间，并把 `sp` 寄存器指向栈空间的起始位置。注意，栈空间是从上向下 `push` 数据的。
+如果不先设置栈空间，函数调用、局部变量、保存返回地址等操作都无法正确工作，因为它们依赖 `sp` 指向一段有效内存。我们需要在启动阶段分配一段栈，并把 `sp` 设置到栈顶。注意，RISC-V 的栈从高地址向低地址增长。
 
 <img src="https://www.ruanyifeng.com/blogimg/asset/2018/bg2018012215.png" alt="栈空间" style="zoom:67%;" />
 
-```assembly
+```asm
 # os/src/entry.asm
 	.section .text.entry
     .globl _start
@@ -246,17 +259,15 @@ boot_stack_top:
 
 `_start` 的这一段汇编代码放在 `.text` 段的 `.entry` 处（回忆之前我们的链接脚本），`boot_stack_lower_bound` 和 `boot_stack_top` 被放在 `.bss` 段的 `.stack` 处.
 
-栈空间的栈顶地址被全局符号 `boot_stack_top` 标识，栈底则被全局符号 `boot_stack` 标识.
+栈空间的栈顶地址被全局符号 `boot_stack_top` 标识，栈底则被全局符号 `boot_stack_lower_bound` 标识.
 
 当我们使用 `mod boot` 时，就会触发 `global_asm!` 嵌入全局汇编代码. 
-
-我觉得这段写的不好，但是先这样，之后再改改.
 
 ### 清空 .bss 段
 
 一般的应用程序的 `.bss` 段，在程序开始运行之前会被执环境（系统库或操作系统内核）固定初始化为零。在 ELF 文件中，为了节省磁盘空间，只会记录 `.bss` 段的位置。且应用程序的假定在它执行前，其 `.bss`段 的数据内容都已全是0.
 
-（这里修改 .bss 段的理论）
+在裸机内核中，这一步通常需要我们自己完成：启动后尽早把 `.bss` 全部清零。否则，未初始化静态变量会带着随机值运行，导致非常隐蔽的错误。
 
 ```rust
 // os/src/main.rs
@@ -274,13 +285,16 @@ pub fn clear_bss() {
 
 ## 实现 println!
 
-RISCV的各个特权级，M级。。。
+在前面的启动阶段，我们已经完成了入口、栈和 `.bss` 的初始化。接下来要解决一个实际问题：如何在没有标准输出设备驱动的情况下打印信息。
 
-然后我们需要了解 SBI，它是 RISC-V 的一种底层规范，操作系统内核可直接调用 SBI 提供的底层功能，如关机、显示字符串等.
+这里需要引入 SBI（Supervisor Binary Interface）。它是 S 模式内核与更高特权级执行环境（通常是 M 模式的 OpenSBI）之间的二进制接口。内核可以通过 SBI 请求底层服务，例如字符输出、关机等。
 
-（一张图）
+在这套分层里，应用程序通过 syscall 向内核请求服务；而内核通过 SBI 向 OpenSBI 请求更底层服务。两者都可能使用 `ecall` 指令触发陷入，但语义和服务提供者不同：
 
-应用程序访问操作系统提供的系统调用的指令是 `ecall` ，操作系统获取 SBI 服务的 SBI 调用的指令也是 `ecall` （操作系统和SBI的关系？？？这里写的对吗？？？）. 此处我们使用的是 QEMU 自带的 OpenSBI，OpenSBI 位于完全掌控机器的机器特权级（Machine Mode），通过 `ecall` 指令，可以完成从弱特权级到强特权级的转换.
+- U -> S：应用程序调用内核 ABI；
+- S -> M：内核调用 SBI.
+
+本实验使用的是 QEMU 自带的 OpenSBI。OpenSBI 运行在 M 模式，内核运行在 S 模式，因此内核执行 SBI `ecall` 后会进入更高特权级执行，完成请求后再返回。
 
 ```rust
 // kernel/src/sbi.rs
@@ -318,4 +332,4 @@ impl Write for Stdout {
 
 我们通过调用 SBI 逐步实现了 Hello, world! 的输出.
 
-(这里可能需要展开讲讲？)
+从实现路径看，`println!` 最终会走到 `core::fmt::Write` 的 `write_str`，而 `write_str` 再逐字符调用 `console_putchar`，后者通过 SBI 把字符送到串口设备。也就是说，`println!` 并不是“直接会打印”，而是依赖了我们自己搭建的格式化输出链路。
