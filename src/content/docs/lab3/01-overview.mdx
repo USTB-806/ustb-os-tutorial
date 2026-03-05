@@ -1,0 +1,165 @@
+---
+title: 分时多任务——概述与原理
+description: 第三章 分时多任务实验概述，协作式调度与抢占式调度原理。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 实验目标
+
+在多道程序的基础上，进一步实现**分时多任务**操作系统。
+
+1. 支持多个用户程序**同时驻留内存**，以轮转方式调度执行；
+2. 通过**时钟中断**实现抢占式调度，防止任意一个任务独占 CPU；
+3. 提供 `yield` 系统调用，允许任务主动让出 CPU（协作式调度）；
+4. 维护每个任务的**任务控制块（TCB）**，记录任务状态与上下文。
+
+---
+
+## 多道程序 vs 分时多任务
+
+| 特性 | 多道程序（第二章） | 分时多任务（第三章） |
+|------|------------------|-----------------|
+| 切换时机 | 任务主动 I/O 等待(但是在代码里并没有主动让出) | **时钟中断强制切换** |
+| 调度方式 | 协作式 | **协作式 + 抢占式** |
+| 任务感知 | 任务不关心调度 | 任务可调用 `yield` 主动让出 |
+| 公平性 | 差（可能饥饿） | **好（时间片轮转）** |
+
+第三章区别于第二章的关键就在于**分时**，操作系统将CPU 时间切成若干**时间片（time slice）**，每个任务轮流获取时间片执行。当然我们在写一个简单的os，这个时间片的长短是可以由我们设置的。
+````rust
+// src/timer.rs
+// Set the next timer interrupt
+pub fn set_next_trigger() {
+    set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
+}
+````
+>你可以**暂时**不用理解这个代码，只需要知道，操作系统也是一个程序，所有的东西都是可以自己设计的。当然如果你想开发一个应用级os，就要遵守很多规范了，这个我们是很鼓励的，不过这个通常不是一个人或者短时间可以完成的，有兴趣可以去一些开源社区探索。例如：[星绽os](https://github.com/asterinas/asterinas)或[BlueOS](https://github.com/vivoblueos/kernel),仅供参考，这两个工业级os也是使用rust编写。
+
+:::tip
+
+ 在此你可能有疑问，为什么要分时间片？为什么不能按顺序一个任务一个任务的执行？
+
+ 你可以试想一下，如果是按顺序执行，如果浏览器加载网页时卡住不动，你就无法在同一时间听音乐或者打字。时间片让CPU快速切换，看起来所有任务都在同时进行。
+
+ 就像灯一样，如果它闪的频率够高，人眼看起来就是常亮的。
+:::
+
+---
+
+## 任务生命周期
+
+第三章还有一个不同于第二章的地方在于，我们对**任务**进行了抽象。在代码中使用`TCB（TaskControlBlock，任务控制块）`结构体来 **抽象**的表示一个任务。
+````rust
+// src/task/task.rs
+pub struct TaskControlBlock {
+    /// The task status in it's lifecycle
+    pub task_status: TaskStatus,
+    /// The task context
+    pub task_cx: TaskContext,
+}
+````
+这样方便我们将一个和任务相关的内容放在结构体中，比如任务运行状态（task_status）和任务上下文（task_cx）。
+在第三章中，我们将一个任务的生命周期分为四个阶段，如下：
+```
+             init_app_cx()
+  ┌─────────────────────────────┐
+  │                             ▼
+UnInit ────────────────────►  Ready
+                              │   ▲
+        run_first/next_task() │   │ mark_current_suspended()
+                              ▼   │
+                             Running
+                                │
+          mark_current_exited() │
+                                ▼
+                              Exited
+```
+其中涉及的`TaskStatus(任务状态)`被定义为枚举类型：
+````rust
+pub enum TaskStatus {
+    /// uninitialized
+    UnInit,
+    /// ready to run
+    Ready,
+    /// running
+    Running,
+    /// exited
+    Exited,
+}
+````
+
+| 状态 | 含义 |
+|------|------|
+| `UnInit` | 任务控制块已分配，尚未初始化 |
+| `Ready` | 已就绪，等待调度器分配 CPU |
+| `Running` | 正在 CPU 上执行 |
+| `Exited` | 已退出，不再参与调度 |
+
+:::caution
+仔细理解任务在不同状态间的切换逻辑！
+:::
+
+---
+
+## 两种调度触发路径
+
+ CPU，直到其主动结束或者遇到错误。但在我们的分时操作系统中，有两种方式可以触发调度权的交接：**协作式调度**和**抢占式调度**。这两种机制都是通过操作系统中统一的 `suspend_current_and_run_next` 接口来实现上下文的切换。
+
+### 路径一：主动让出（协作式调度）
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial                                                          `yield` 系统调用，通知内核将自己挂起，主动让出 CPU 给下一个处于就绪状态的任务执行。-Kernel/
+
+
+```text
+ ecall
+  → trap_handler (UserEnvCall)
+    → syscall(SYSCALL_YIELD)
+      → sys_yield()
+        → suspend_current_and_run_next()
+          ├─ mark_current_suspended()   ← 核心挂起逻辑
+          └─ run_next_task()
+```
+
+### 路径二：时钟中断抢占（抢占式调度）
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os- CPU，系统将面临停滞危险。因此在分时多任务中，操作系统依赖硬件时钟中断（Timer Interrupt）周期性地打断当前任务，强行夺回控制权。通过设置固定长度的时间片，一旦定时倒计时结束，便会产生一次时钟中断触发 Trap，避免单个程序霸占系统。
+
+
+```text
+--------断触发
+  → trap_handler (SupervisorTimer)
+    → set_next_trigger()              ← 重新设置下一次中断
+    → suspend_current_and_run_next()
+          ├─ mark_current_suspended()   ← 核心挂起逻辑
+          └─ run_next_task()
+```
+
+---
+
+## 本章重点内容
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json  -**重点内容**如下：
+
+1. **时钟中断的配置与接收**：理解 RISC-V 中断的触发规律，掌握操作系统如何通过定时器夺回 CPU 掌控权。
+2. **核心数据结构抽象 (TaskControlBlock)**：理解任务控制块的数据形态与生命周期中的状态流转 (`UnInit`, `Ready`, `Running`, `Exited`)。
+3. **上下文切换机制**：解析 `__switch` 汇编如何保存运行态和栈指针，怎样从前一个任务平滑进入到下一个任务。
+4. **系统核心调度器逻辑**：学习基于时间的简单轮转调度策略 (`find_next_task` 和 `run_next_task` 的设计)。
+
+---
+
+## 测试程序简介
+
+ `ch3b_yield0/1/2`，它们分别负责循环打印字符 A/B/C，并每打印一行文字后尝试主动让出 CPU。
+
+**预期输出**形如（A、B、C 交替出现）：
+
+```text
+AAAAAAAAAA [1/5]
+BBBBBBBBBB [1/5]
+CCCCCCCCCC [1/5]
+AAAAAAAAAA [2/5]
+BBBBBBBBBB [2/5]
+...
+```
+
+**提示**：在目前的初版代码中，`mark_current_suspended` 未完全正确实现，导致程序 A 会由于状态没有变为 `Ready` 未被移出运行判断标准，把所有行全部打完后，B 和 C 才会被调度。解决此问题就是本章的最终目标之一。

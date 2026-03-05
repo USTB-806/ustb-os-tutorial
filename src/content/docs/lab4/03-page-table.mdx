@@ -1,0 +1,274 @@
+---
+title: 页表实现与关键函数分析
+description: PageTableEntry 与 PageTable 结构详解，四个核心函数 find_pte_create / find_pte / map / unmap 的设计分析。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 页表项（PageTableEntry）结构
+
+RISC-V SV39 规定，每个页表项为 8 字节（64位）：
+
+```
+ 63    54 53          10 9  8  7  6  5  4  3  2  1  0
+
+  保留   │     PPN      │ RSW│ D│ A│ G│ U│ X│ W│ R│ V│
+ (10位) │    (44位)    │(2位)│  │  │  │  │  │  │  │  │
+
+```
+
+| 标志位 | 含义 |
+|--------|------|
+| **V** | Valid —— 该 PTE 是否有效 |
+| **R** | Readable —— 映射的页可读 |
+| **W** | Writable —— 映射的页可写 |
+| **X** | Executable —— 映射的页可执行 |
+| **U** | User —— U-mode 可访问（清零则只有 S-mode 可访问） |
+| G | Global —— 全局映射 |
+| A | Accessed —— 硬件置位，表示页最近被访问过 |
+| D | Dirty —— 硬件置位，表示页最近被写过 |
+
+#
+
+
+```rust
+bitflags! {
+    pub struct PTEFlags: u8 {
+        const V = 1 << 0;
+        const R = 1 << 1;
+        const W = 1 << 2;
+        const X = 1 << 3;
+        const U = 1 << 4;
+        const G = 1 << 5;
+        const A = 1 << 6;
+        const D = 1 << 7;
+    }
+}
+
+impl PageTableEntry {
+    pub fn new(ppn: PhysPageNum, flags: PTEFlags) -> Self {
+        PageTableEntry {
+            bits: ppn.0 << 10 | flags.bits as usize,
+            //   ^^^^^^^^^^^^^^^^   PPN 放在 [53:10]
+            //                    ^^^^^^^^^^^^^^^ flags 放在 [7:0]
+        }
+    }
+    
+    pub fn ppn(&self) -> PhysPageNum {
+        (self.bits >> 10 & ((1usize << 44) - 1)).into()
+    }
+    
+    pub fn is_valid(&self) -> bool {
+        (self.flags() & PTEFlags::V) != PTEFlags::empty()
+    }
+}
+```
+
+<Aside type="note">
+**V 位的特殊规则**：对于中间层（非叶子）页表项，R/W/X 三位必须全为 0，仅 V 位有效，
+PPN 指向下一级页表的物理地址。对于叶子页表项，R/W/X 至少一位为 1。
+CPU 硬件据此区分中间节点和叶子节点。
+</Aside>
+
+---
+
+## `PageTable` 结构
+
+```rust
+pub struct PageTable {
+    root_ppn: PhysPageNum,      // 根页表物理页号
+    frames: Vec<FrameTracker>,  // 所有中间节点页表帧的所有权
+}
+```
+
+`frames` 持有所有动态分配的页表节点的 `FrameTracker`，通过 RAII 保证：
+ `PageTable` 销毁时，所有中间页表节点的物理帧自动归还。
+
+---
+
+## 四个核心函数（Lab 4 挖空）
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os- `kernel/src/mm/page_table.rs`。
+
+### 1. `find_pte_create` —— 三级查找（允许创建）
+
+**函数签名：**
+```rust
+fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
+```
+
+**作用**：找到 VPN 对应的叶子 PTE 的可变引用。若中间节点不存在，**分配新的物理帧**
+--------间节点 PTE（V 位置 1，PPN 指向新帧）。
+
+**遍历过程（逐级下沉）：**
+
+```
+vpn.indexes() = [i0, i1, i2]   // [VPN[2], VPN[1], VPN[0]]
+
+--------查找 i0
+  ppn = self.root_ppn
+  pte = ppn.get_pte_array()[i0]
+  若 pte.is_valid() == false：
+    分配新帧 frame，令 pte = PageTableEntry::new(frame.ppn, V)
+    将 frame 存入 self.frames（转移所有权）
+  ppn = pte.ppn()   // 进入二级页表
+
+--------查找 i1
+  pte = ppn.get_pte_array()[i1]
+  （同上，若不存在则分配新帧）
+  ppn = pte.ppn()   // 进入三级页表
+
+--------查找 i2
+  pte = &mut ppn.get_pte_array()[i2]
+  直接返回该 PTE 的可变引用（叶子节点，不判断 valid）
+```
+
+<Aside type="note">
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial  V 位，**不设置 R/W/X/U** 标志——这标志着它是中间节点。
+ PTE 的引用，不关心它是否 valid（由 `map` 来写入）。
+</Aside>
+
+### 2. `find_pte` —— 三级查找（只读）
+
+**函数签名：**
+```rust
+fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
+```
+
+**作用**：找到 VPN 对应的叶子 PTE 的可变引用。若任意中间节点无效，返回 `None`。
+
+**与 `find_pte_create` 的区别：**
+
+| | `find_pte_create` | `find_pte` |
+|--|-------------------|------------|
+| 接收者 | `&mut self` | `&self` |
+| 中间节点缺失 | 分配新帧并创建节点 | 返回 `None` |
+| 用途 | 建立新映射（`map`） | 查询/删除现有映射（`translate`, `unmap`） |
+
+**遍历过程：**
+
+```
+vpn.indexes() = [i0, i1, i2]
+
+ppn = self.root_ppn
+         pte = ppn.get_pte_array()[i0]
+         若 !pte.is_valid() → return None
+
+ppn = pte.ppn()
+         pte = ppn.get_pte_array()[i1]
+         若 !pte.is_valid() → return None
+
+ppn = pte.ppn()
+         return Some(&mut ppn.get_pte_array()[i2])
+```
+
+### 3. `map` —— 建立 VPN → PPN 映射
+
+**函数签名：**
+```rust
+pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags)
+```
+
+**作用**：在页表中建立一个虚拟页到物理页的映射。
+
+**实现逻辑：**
+
+```
+1. pte = self.find_pte_create(vpn).unwrap()
+   // 找到（或创建）叶子节点
+
+2. assert!(!pte.is_valid())
+   // 断言：该 VPN 尚未被映射（防御性检查，避免重复映射）
+
+3. *pte = PageTableEntry::new(ppn, flags | PTEFlags::V)
+   // 写入 PPN 和权限标志，并置位 V（使映射有效）
+```
+
+<Aside type="caution">
+ `flags` 中加上 `PTEFlags::V`，否则写入的 PTE 虽然有 PPN，
+ V 位为 0，CPU 仍会认为该页未映射并触发 PageFault。
+</Aside>
+
+### 4. `unmap` —— 删除 VPN 映射
+
+**函数签名：**
+```rust
+pub fn unmap(&mut self, vpn: VirtPageNum)
+```
+
+**作用**：将 VPN 对应的叶子 PTE 清零，解除映射。
+
+**实现逻辑：**
+
+```
+1. pte = self.find_pte(vpn).unwrap()
+   // 找到叶子节点（若不存在则 panic）
+
+2. assert!(pte.is_valid())
+   // 断言：该映射确实存在
+
+3. *pte = PageTableEntry::empty()
+   // 将 PTE 清零（等价于 bits = 0），V 位变为 0，映射失效
+```
+
+<Aside type="tip">
+`unmap` 只清零页表项，并**不**释放被映射的数据物理帧。数据帧的释放由
+`MapArea.data_frames` 中的 `FrameTracker` 负责（从 `BTreeMap` 中移除时自动析构）。
+--------间节点的帧由 `PageTable.frames` 持有，直到整个 `PageTable` 销毁时释放。
+</Aside>
+
+---
+
+## 完整调用链示意
+
+ `MapArea::map_one(vpn, page_table)` 为例（Framed 映射）：
+
+```
+MapArea::map(&mut self, page_table: &mut PageTable)
+  └─ for vpn in self.vpn_range
+       └─ self.map_one(page_table, vpn)
+              │
+              ├─ (Framed) frame = frame_alloc()
+              │           ppn = frame.ppn
+              │           self.data_frames.insert(vpn, frame)
+              │
+              └─ page_table.map(vpn, ppn, PTEFlags)
+                      └─ find_pte_create(vpn)
+                              └─ 按需分配中间节点
+                         *pte = PTE::new(ppn, flags | V)
+```
+
+```
+MapArea::unmap(&mut self, page_table: &mut PageTable)
+  └─ for vpn in self.vpn_range
+       ├─ page_table.unmap(vpn)
+       │       └─ find_pte(vpn)
+       │              *pte = PTE::empty()
+       │           （页表项清零，映射失效）
+       │
+       └─ (Framed) self.data_frames.remove(&vpn)
+                   （FrameTracker Drop，物理帧归还）
+```
+
+---
+
+## `translate` 与地址翻译辅助函数
+
+```rust
+/// 查询 VPN 对应的 PTE（用于内核访问用户内存）
+pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
+    self.find_pte(vpn).map(|pte| *pte)
+}
+
+/// 翻译虚拟地址到物理地址
+pub fn translate_va(&self, va: VirtAddr) -> Option<PhysAddr> {
+    self.find_pte(va.floor()).map(|pte| {
+        let aligned_pa: PhysAddr = pte.ppn().into();
+        let offset = va.page_offset();
+        (usize::from(aligned_pa) + offset).into()
+    })
+}
+```
+
+`translated_byte_buffer` 通过上述接口，将用户程序传入的虚拟地址指针
+--------的数据复制。

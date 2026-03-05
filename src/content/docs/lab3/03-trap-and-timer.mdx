@@ -1,0 +1,183 @@
+---
+title: Trap 处理与时钟中断机制
+description: RISC-V Trap 处理流程、时钟中断配置以及抢占式调度的实现原理。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+
+fix_0 fix_02.py--------断和处理任务异常的能力（**Trap 机制**）。这就好比上课时，老师必须有打断学生发言、点名下一个同学的能力，否则课堂就成了一言堂。
+
+## RISC-V 特权级与 Trap
+
+RISC-V 架构定义了三种主要的特权级（由高到低）：
+
+| 特权级 | 名称 | 本实验使用场景 |
+|--------|------|--------------|
+| M-mode | Machine | 机器态。直接操作底层硬件，SBI（如 OpenSBI）层运行在此级别。 |
+| S-mode | Supervisor | 监管者态。操作系统内核（我们的 rCore）运行在此级别。 |
+| U-mode | User | 用户态。普通的应用程序运行在此级别，受到最严格的限制。 |
+
+ U-mode 的应用程序执行 `ecall` 指令主动发起系统调用，或遭遇非法指令异常，亦或者是硬件时钟中断来临时，CPU 会利用硬件机制自动将特权级提升到 S-mode，并跳转到 `stvec` 寄存器指向的内核入口地址。这一神圣的“越级”与“捕获”过程，我们统称为 **Trap**。
+
+---
+
+## Trap 处理全流程
+
+fix_02.py  Trap 护城河是由汇编保存现场和 Rust 逻辑处理共同组成的：
+
+```text
+--------
+  │  （发生 ecall / 异常 / 时钟中断 等 Trap 事件）
+  ▼
+__alltraps（位于 trap.S 的汇编防线）
+  │  将 32 个通用寄存器以及必要的状态信息打包保存为 TrapContext
+  │  将栈指针切换到内核栈空间
+  ▼
+trap_handler（位于 /kernel/src/trap/mod.rs 的 Rust 核心逻辑）
+  │
+  ├─ Exception::UserEnvCall     → syscall() 分析系统调用号执行逻辑 (如 sys_yield)
+  ├─ Interrupt::SupervisorTimer → 执行 set_next_trigger() 并调用 suspend_current_and_run_next() 发生抢占
+  ├─ Exception::StoreFault 等   → 出现严重错误，内核通过 exit_current_and_run_next() 直接击杀任务
+  └─ ... 其他未见过的 Trap 则直接 panic!
+  │
+  ▼
+__restore（位于 trap.S 的返程航班）
+  │  从内核栈的 TrapContext 恢复所有通用寄存器与特权状态
+  │  执行 sret 指令，特权级降回 U-mode，返回用户态继续执行
+  ▼
+python3 fix_01.py fix_02.py 
+```
+
+### `stvec` 的设定原点
+
+fix_02.py CPU 知道 Trap 发生时该往哪里跳，我们在内核初始化的 `trap::init()` 中进行了绑定：
+
+```rust
+pub fn init() {
+    extern "C" { fn __alltraps(); }
+    unsafe {
+        // 将 __alltraps 汇编函数的内存地址写入 stvec 寄存器
+        stvec::write(__alltraps as usize, TrapMode::Direct);
+    }
+}
+```
+
+`TrapMode::Direct` 模式表示：不论是来什么中断或异常，统统一视同仁，均跳转到 `__alltraps` 让内核接管。
+
+---
+
+## TrapContext 上下文结构
+
+```rust
+#[repr(C)]
+pub struct TrapContext {
+    pub x: [usize; 32],   // x0–x31 所有的通用寄存器
+    pub sstatus: Sstatus, // S-mode 状态寄存器 CSR（包含 SPP、SPIE 等状态位）
+    pub sepc: usize,      // 记录发生 Trap 时那一刻的 PC，决定 sret 最终返回的指令地址
+}
+```
+
+`__alltraps` 会老老实实地将这 34 个字（272 字节）逐一压入当前的内核栈中；处理完毕后，`__restore` 同样依靠这个结构原样恢复现场。
+
+### `sstatus` 中的关键状态位
+
+| 位 | 名称 | 含义 |
+|----|------|------|
+| 8 | SPP | 记录 Trap 发生前的特权级（0=U-mode, 1=S-mode），`sret` 依靠它决定降级到哪个特权级 |
+| 5 | SPIE | 记录 Trap 发生前的中断使能状态，`sret` 返回时会恢复此状态 |
+
+ `TrapContext::app_init_context` 初始化一个新任务时，我们会刻意将 `SPP` 置 `0`（暗示它应该返回到 U-mode），并将 `SPIE` 置 `1`（确保进入用户态后能打开中断），这样程序第一次执行时就能优雅且正确地开启用户态征程，同时随时准备响应后续的时钟中断。
+
+---
+
+## RISC-V 时钟中断机制（Timer Interrupt）
+
+### 时钟计数器 `mtime`
+
+ RISC-V 平台上，总是流淌着一条名为 `mtime` 的时间长河。它是一个单调递增的 64 位硬件计数器，可以通过读取 `time` CSR 来窥探当前时间：
+
+```rust
+pub fn get_time() -> usize {
+    time::read()
+}
+```
+
+`mtime` 递增的速度取决于板子（或模拟器）的时钟频率（CLOCK_FREQ），在本实验环境 QEMU 下通常为 12.5 MHz（即 1秒走 12,500,000 下）。
+
+### 设置定时器警戒线
+
+ SBI 调用，设定未来的某一个时间点 `mtimecmp`。当真实的 `mtime` 随波逐流增长到大于等于 `mtimecmp` 的那一刻，硬件就会拉响警报：触发时钟中断！
+
+```rust
+pub fn set_next_trigger() {
+    // 设置下一次触发时间 = 当前时间 + 一个时间片的滴答数
+    set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
+}
+```
+
+#fix_02.py 
+--------，我们将 `TICKS_PER_SEC` 设定为 `100`。换而言之，1 秒钟将被切分为 100 份，每一份也就是所谓的时间片长度（约等于 10 ms 的执行时间，此时流逝了 125,000 个时钟周期）。
+
+<Aside type="note">
+`set_timer` 底层本质是由 M-mode 的 OpenSBI 提供服务完成的。因为在 RISC-V 标准中，操作决定硬件命脉的 `mtimecmp` 寄存器只能在最高权限 M-mode 下进行，S-mode 的内核只能委曲求全去“请求” SBI 服务来帮忙。
+</Aside>
+
+### 使能时钟中断听觉
+
+--------断信号，如果我们屏蔽了“听觉”，系统依然不会理会。
+
+```rust
+pub fn enable_timer_interrupt() {
+    unsafe {
+        sie::set_stimer(); // 设置 SIE 寄存器的 STIE 位，开启 S-mode 处理时钟中断的大门
+    }
+}
+```
+
+python3 fix_01.`main.rs`）阶段，这些环节可谓环环相扣：
+
+```rust
+trap::init();                   // 1. 设置 stvec 绑定入口
+mm::init();                     // 2. 内存堆初始化
+app_loader::load_apps();        // 3. 将所有用户程序装载就绪
+trap::enable_timer_interrupt(); // 4. 打通时钟中断的接收通道！
+timer::set_next_trigger();      // 5. 为第一声警钟设定好倒计时！
+task::run_first_task();         // 6. 发令枪响，拉开第一个任务的序幕
+```
+
+<Aside type="caution">
+**初始化顺序的奥秘**：步骤 4 和 5 必须在步骤 6（进入用户态）之前完成！否则用户程序一旦启动，由于没有设下定时器炸弹，它就再也不会被时钟打断，整个分时系统的美好畅想就将沦为空谈。
+</Aside>
+
+---
+
+## 殊途同归：触发调度的双龙戏珠
+
+--------断，还是应用程序主动请求让出，它们最终在内核里都将导向同一个枢纽：
+
+```rust
+// 路径其一：从时钟中断打断 trap_handler(Interrupt::SupervisorTimer)
+ Trap::Interrupt(Interrupt::SupervisorTimer) => {
+    set_next_trigger();                  // 必须立即设下下一轮定时炸弹
+    suspend_current_and_run_next();      // 调度交班
+}
+
+// 路径其二：通过 ecall 请求 syscall 处理 sys_yield
+pub fn sys_yield() -> isize {
+    suspend_current_and_run_next();      // 同样是调度交班
+    0
+}
+```
+
+fix_02.py --------被称为**机制与策略分离**（Separation of Mechanism and Policy）的经典架构。
+
+```rust
+// task/mod.rs
+pub fn suspend_current_and_run_next() {
+    mark_current_suspended();   // 策略：把现任从王座上拉下来，变成 Ready
+    run_next_task();            // 机制：去题名库挑选中标的继任者，执行硬切换
+}
+```
+
+python3 fix_01.py Trap 和时钟驱动任务流转的底层蓝图已在你面前全部展开！

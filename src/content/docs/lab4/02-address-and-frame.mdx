@@ -1,0 +1,252 @@
+---
+title: 地址类型体系与物理帧管理
+description: PA/VA/PPN/VPN 四种地址类型的 Rust 封装、物理帧生命周期与 FrameTracker RAII。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 地址类型体系
+
+### 四种地址类型
+
+ Rust 类型系统层面防止物理/虚拟地址的混用，内核定义了四个独立的 newtype：
+
+```rust
+pub struct PhysAddr(pub usize);    // 物理地址（56位有效）
+pub struct VirtAddr(pub usize);    // 虚拟地址（39位有效）
+pub struct PhysPageNum(pub usize); // 物理页号 PPN（44位有效）
+pub struct VirtPageNum(pub usize); // 虚拟页号 VPN（27位有效）
+```
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel -os-tutorial 
+
+```
+        >> 12           &(PAGE_SIZE-1)
+PhysAddr ──────► PhysPageNum      PhysAddr ─────────► 页内偏移
+  ▲                  │
+  │ << 12            │
+  └──────────────────┘
+
+        >> 12
+VirtAddr ──────► VirtPageNum      VirtAddr ─────────► 页内偏移
+  ▲                  │
+  │ << 12            │
+  └──────────────────┘
+```
+
+### 关键转换函数
+
+```rust
+impl VirtAddr {
+    /// 向下取整到页号（floor）
+    pub fn floor(&self) -> VirtPageNum {
+        VirtPageNum(self.0 / PAGE_SIZE)
+    }
+    /// 向上取整到页号（ceil）
+    pub fn ceil(&self) -> VirtPageNum {
+        VirtPageNum((self.0 - 1 + PAGE_SIZE) / PAGE_SIZE)
+    }
+    /// 提取页内偏移
+    pub fn page_offset(&self) -> usize {
+        self.0 & (PAGE_SIZE - 1)
+    }
+}
+```
+
+<Aside type="note">
+`floor()` 和 `ceil()` 在处理内存区域边界时非常重要：
+- 区域的起始地址用 `floor()` 取整（不映射起始地址所在页不需要的部分）；
+- 区域的结束地址用 `ceil()` 取整（必须包含最后一个字节所在的完整页）。
+</Aside>
+
+### `VirtPageNum::indexes()` —— 提取三级索引
+
+
+
+```rust
+impl VirtPageNum {
+    pub fn indexes(&self) -> [usize; 3] {
+        let mut vpn = self.0;
+        let mut idx = [0usize; 3];
+        for i in (0..3).rev() {
+            idx[i] = vpn & 511;   // 取低 9 位
+            vpn >>= 9;             // 右移 9 位，准备下一级
+        }
+        idx
+    }
+}
+```
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial  VPN，`indexes()` 结果为 `[VPN[2], VPN[1], VPN[0]]`，分别是
+
+
+```
+VPN = 0b_000000001_000000010_000000011  (简化示例)
+                │         │         │
+              VPN[2]=1  VPN[1]=2  VPN[0]=3
+```
+
+### `PhysPageNum` 的内存访问方法
+
+```rust
+impl PhysPageNum {
+    /// 将物理页视为 512 个 PTE 的数组（用于访问各级页表）
+    pub fn get_pte_array(&self) -> &'static mut [PageTableEntry] {
+        let pa: PhysAddr = (*self).into();
+        unsafe {
+            core::slice::from_raw_parts_mut(pa.0 as *mut PageTableEntry, 512)
+        }
+    }
+    /// 将物理页视为字节数组（用于复制数据）
+    pub fn get_bytes_array(&self) -> &'static mut [u8] { ... }
+    /// 将物理页视为某类型 T 的引用
+    pub fn get_mut<T>(&self) -> &'static mut T { ... }
+}
+```
+
+<Aside type="caution">
+ `'static` 生命周期的引用。这在多级页表遍历时是必要的，因为
+Rust 借用检查器无法推断跨物理内存访问的生命周期。使用者需要保证不产生
+
+</Aside>
+
+---
+
+## 物理帧管理
+
+### 物理帧分配器 `StackFrameAllocator`
+
+ `ekernel` 到 `MEMORY_END` 的全部物理页：
+
+```
+
+
+  内核代码数据  │         空闲物理帧（供分配）               │
+  [0, ekernel)│         [ekernel_ceil, MEMORY_END)        │
+
+                ↑
+             初始 current
+
+current++（或从 recycled 栈弹出）
+push 到 recycled 栈
+```
+
+```rust
+pub struct StackFrameAllocator {
+    current: usize,    // 下一个未分配帧的 PPN
+    end: usize,        // 最后一个可用帧的 PPN + 1
+    recycled: Vec<usize>, // 已释放待复用的帧
+}
+```
+
+### `FrameTracker` —— RAII 帧管理
+
+`FrameTracker` 是物理帧的 Rust 所有权包装器，利用 `Drop` trait 自动归还帧：
+
+```rust
+pub struct FrameTracker {
+    pub ppn: PhysPageNum,
+}
+
+impl Drop for FrameTracker {
+    fn drop(&mut self) {
+        frame_dealloc(self.ppn); // 离开作用域时自动归还给分配器
+    }
+}
+```
+
+
+
+```rust
+// 分配一个物理帧
+let frame: FrameTracker = frame_alloc().unwrap();
+let ppn = frame.ppn; // 获取物理页号
+
+// 离开作用域时 frame 自动析构，ppn 对应的物理帧被回收
+```
+
+`FrameTracker::new` 在分配时还会**清零物理页**，避免信息泄露：
+
+```rust
+impl FrameTracker {
+    pub fn new(ppn: PhysPageNum) -> Self {
+        let bytes_array = ppn.get_bytes_array();
+        for i in bytes_array {
+            *i = 0; // 清零，保证新分配的页是干净的
+        }
+        Self { ppn }
+    }
+}
+```
+
+---
+
+## 逻辑段与地址空间
+
+### `MapArea` —— 虚拟内存逻辑段
+
+```rust
+pub struct MapArea {
+    vpn_range: VPNRange,                         // [start_vpn, end_vpn)，连续虚拟页范围
+    data_frames: BTreeMap<VirtPageNum, FrameTracker>, // Framed 模式下，VPN → 物理帧
+    map_type: MapType,                           // 映射类型
+    map_perm: MapPermission,                     // 权限标志
+}
+```
+
+### `MapType` —— 两种映射模式
+
+| `MapType` | 适用场景 | 物理地址来源 |
+|-----------|---------|------------|
+| `Identical` | 内核代码/数据段 | `PA = VA`（一一对应） |
+| `Framed` | 用户程序、用户栈、TrapContext | 动态分配的物理帧，随机放置 |
+
+```rust
+pub enum MapType {
+    Identical,  // 虚拟地址 == 物理地址（内核专用）
+    Framed,     // 虚拟地址 → 随机物理帧（用户程序）
+}
+```
+
+### `MapPermission` —— 权限标志
+
+```rust
+bitflags! {
+    pub struct MapPermission: u8 {
+        const R = 1 << 1;  // Readable
+        const W = 1 << 2;  // Writable
+        const X = 1 << 3;  // Executable
+        const U = 1 << 4;  // User-accessible
+    }
+}
+```
+
+`MapPermission` 最终会被转换为 `PTEFlags` 写入页表项。
+
+### `MemorySet` —— 完整地址空间
+
+```rust
+pub struct MemorySet {
+    page_table: PageTable,   // 根页表（持有所有中间页表的 FrameTracker）
+    areas: Vec<MapArea>,     // 所有逻辑段
+}
+```
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial 
+
+```
+MemorySet
+  ├── PageTable（根页表）
+  │     └── frames: Vec<FrameTracker>（所有中间页表节点的物理帧）
+  └── areas: Vec<MapArea>
+        ├── MapArea（.text 段）
+        │     └── data_frames（Identical 时为空）
+        ├── MapArea（.data 段）
+        └── MapArea（用户栈）
+              └── data_frames
+                    ├── VPN_0 → FrameTracker（PPN_a）
+                    ├── VPN_1 → FrameTracker（PPN_b）
+                    └── ...
+```
+
+ `MemorySet` 被销毁时，所有 `FrameTracker` 自动析构，物理帧自动归还。

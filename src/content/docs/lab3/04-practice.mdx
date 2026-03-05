@@ -1,0 +1,147 @@
+---
+title: 实验任务：调试与完善任务挂起逻辑
+description: 阅读代码、理解问题所在，并完成 mark_current_suspended 函数的实现。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+
+#
+python3 fix_01.py 
+
+## 实验前置要求
+
+python3 fix_01.py 
+
+- 已阅读并理解了 [任务管理核心代码分析](/ustb-os-tutorial/lab3/02-task-management/) 中关于任务状态机（TaskStatus）和 TaskManager 的全部内容。
+- 已阅读并理解了 [Trap 处理与时钟中断机制](/ustb-os-tutorial/lab3/03-trap-and-timer/) 中 `suspend_current_and_run_next` 的调用流向机制。
+- 能够在开发容器中顺利使用 `make run` 编译并启动内核镜像体验目前的运行状况。
+
+---
+
+## 寻找问题所在
+
+#python3 fix_01.py 
+python3 fix_01.`kernel/src/task/mod.rs` 文件，找到如下被挖空的 `mark_current_suspended` 函数：
+
+```rust
+/// Change the status of current `Running` task into `Ready`.
+fn mark_current_suspended(&self) {
+    let mut inner = self.inner.exclusive_access();
+    let current = inner.current_task;
+    //when suspend current task, and you want to call it again,
+    //you need to modify its TaskStatus
+
+}
+```
+
+fix_01.py  python3**挂起当前正在执行的任务**。目前它获取了当前任务的编号 `current`，并且已经拿到了调度器的访问权限 `inner`。但关键的修改任务状态的那一步逻辑**被空了下来**。
+
+fix_03.py 
+
+---
+
+## 异常定位与根因剖析
+
+### 异常体验
+
+#
+python3 fix_01.py .devcontainer 2025s-rcore-wdlin233 fix_01.py fix_02.py fix_03.py musl package-lock.json ustb-os-kernel ustb-os-`ch3b_yield0`, `ch3b_yield1`, `ch3b_yield2`）。它们应该分别循环交互着打印出 `A B C` 才对，并在每一行执行结束后通过 `yield()` 尝试呼唤系统调度。
+
+python3 fix_01.py 
+**A 霸占了所有的时间！！在 A 疯狂打满所有的行数之后，B 和 C 才能得到机会。**
+fix_03.py --------单道按顺序执行的批处理模样了。
+
+### 根因分析
+
+ `sys_yield` 或是时钟中断的链路如下：
+
+```text
+sys_yield() / SupervisorTimer
+  → suspend_current_and_run_next()
+      → mark_current_suspended()   ← 【目前这里啥也没做】
+      → run_next_task()
+            → find_next_task()
+                  → 寻找 TaskStatus::Ready 状态的候选人！
+```
+
+`find_next_task` 会在就绪队列中轮转寻找标记为 `TaskStatus::Ready` 的任务。
+
+ `mark_current_suspended` 函数并没有把当前任务自己的状态从 `Running` 切换回 `Ready`。所以当它调用 `yield()` 试图休息时，调度器在扫描全场时，发现除了还没开始运行的就绪任务外，根本没有将其视为合法的“等待中任务”。调度器继续寻找，阴差阳错这会让未完成就绪状态重塑的 A 不断重新占据 CPU 主导判断权。
+
+### 结合代码自我检验：
+
+#python3 fix_01.py
+#python3 fix_01.py 
+#.devcontainer 2025s-rcore-wdlin233 fix_01.py fix_02.py fix_03.py musl package-lock.json ustb-os-kernel ustb-os-tutorial 
+python3 fix_01.py
+
+- 当前任务发起 `yield` 系统调用后，不经过我们修复的代码，它的 `task_status` 仍旧是什么？
+- 如果系统中三个任务的状态始终都是 `Running` 状态，`find_next_task` 轮空后最终会采取什么策略？
+- 与本函数相邻有个写好的函数叫做 `mark_current_exited` 函数。挂起（suspended）与退出（exited）对系统调度结果有什么本质区别？
+
+fix_03.py `mark_current_exited` 的实现作为对比：
+```rust
+fn mark_current_exited(&self) {
+    let mut inner = self.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].task_status = TaskStatus::Exited;
+}
+```
+
+---
+
+## 实验要求（Let's Hack!）
+
+<Aside type="caution">
+**不要急于复制答案！** 
+python3 fix_01.py `kernel/src/task/mod.rs`，利用上述提示，尝试写入逻辑让 TCB 获取自己应该呈现的状态。
+</Aside>
+
+**目标要求：补全 `mark_current_suspended` 函数！**使其能完美交接棒。只要将其状态变回调度器青睐的状态，就能够实现我们理想中的分时轮转！
+
+```rust
+fn mark_current_suspended(&self) {
+    let mut inner = self.inner.exclusive_access();
+    let current = inner.current_task;
+    //when suspend current task, and you want to call it again,
+    //you need to modify its TaskStatus
+    // TODO: 就在这里添加你的代码
+}
+```
+
+---
+
+## 验证与结项
+
+python3 fix_01.py
+
+python3 fix_01.py 
+
+```text
+AAAAAAAAAA [1/5]
+BBBBBBBBBB [1/5]
+CCCCCCCCCC [1/5]
+AAAAAAAAAA [2/5]
+BBBBBBBBBB [2/5]
+CCCCCCCCCC [2/5]
+AAAAAAAAAA [3/5]
+...
+Test write A OK!
+Test write B OK!
+Test write C OK!
+All applications completed!
+```
+
+#
+python3 fix_01.py --------最重要的一块拼图，实现了操作系统历史上关键的时间片轮转壮举！
+
+---
+
+## 思考题（选做）
+
+1. 若将 `TICKS_PER_SEC` 从 100 改为 10，程序的行为会发生什么变化？为什么？
+2. `run_next_task` 在调用 `__switch` 前执行了 `drop(inner)`。如果移除这行 `drop`，会发生什么错误？在具体哪个执行动作中会触发该错误？
+3. 本章使用的是简单的**轮转调度（Round-Robin）**。如果想实现带有优先级的调度，对 `TaskControlBlock` 和 `find_next_task` 应该各自做哪些扩充？
+4. 这个小小的内核中，`get_current_task_info` 和 `get_total_syscall_count` 函数均暂设返回了默认值。能否尝试根据内核现存的 `SyscallTrace` 数据结构来对他们进行完善补全？（该项挑战更具挑战性！）
+5. 我们在本节引言中提到“前面的批处理并未主动让出 CPU”，这是从哪里体现的？这一章又是为什么能够在毫无征兆时抢救回执行流？结合源码回答。

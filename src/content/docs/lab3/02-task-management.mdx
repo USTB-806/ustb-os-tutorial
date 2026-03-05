@@ -1,0 +1,198 @@
+---
+title: 任务管理核心代码分析
+description: TaskControlBlock、TaskContext、TaskManager 及 __switch 函数的深度解析。
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+
+#
+#python3 fix_
+fix_02.py --------，看看系统是如何**描述**一个任务，并实现这些任务间的**切换**与**管理**的。
+
+## 任务控制块（TCB）
+
+ `kernel/src/task/task.rs` 中定义的 `TaskControlBlock` 结构体：
+
+```rust
+#[derive(Copy, Clone)]
+pub struct TaskControlBlock {
+    pub task_status: TaskStatus,
+    pub task_cx: TaskContext,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum TaskStatus {
+    UnInit,    // 未初始化
+    Ready,     // 就绪
+    Running,   // 运行中
+    Exited,    // 已退出
+}
+```
+
+`TaskControlBlock` (TCB) 是操作系统用来管理控制任务的最重要的数据结构。当前为了保持精简，它仅包含两个字段：
+- `task_status`：任务的当前状态，是调度器决定下一任务的关键；
+- `task_cx`：任务上下文，用于保存任务被切换出去时 CPU 寄存器的快照环境，当任务恢复时再原样读回。
+
+<Aside type="note">
+ `#[derive(Copy, Clone)]`。这说明 TCB 在现阶段可以按位复制。这是因为目前内核使用静态数组存储所有 TCB，没有涉及复杂的堆分配和所有权转移。未来如果我们要实现更复杂的任务模型（比如动态的进程资源），可能就需要去掉它。
+</Aside>
+
+---
+
+## 任务上下文（TaskContext）
+
+python3 fix_01.py  `kernel/src/task/context.rs`：
+
+```rust
+#[repr(C)]
+pub struct TaskContext {
+    ra: usize,       // 返回地址寄存器
+    sp: usize,       // 栈指针
+    s: [usize; 12],  // callee-saved 寄存器 s0–s11
+}
+```
+
+### 为什么只需要保存这些寄存器？
+
+fix_02.py  RISC-V 函数调用约定（ABI）决定的，寄存器分为两类：
+
+| 类别 | 寄存器 | 负责方 | 是否需要保存到 TaskContext |
+|------|--------|--------|--------------------------|
+| caller-saved | t0–t6, a0–a7 | 调用前保存 | **否**（`__switch` 本身为函数调用，这类寄存器已由调用者保存在原栈中） |
+| callee-saved | s0–s11, ra, sp | 被调用者保存 | **是** |
+
+ `__switch` 进行任务切换时，从编译器的视角看来，那就是一次普通的函数调用。因此，编译器已经自动将 caller-saved 寄存器压入到了内核栈。我们作为被调用者（`__switch`），只需要关注手动把剩下的 callee-saved 寄存器保存下来即可。
+
+### 两个重要的构造函数
+
+ `TaskContext`，我们有两个关键的初始功能：
+
+```rust
+// 1. 零初始化，目前用于 _unused 占位符
+pub fn zero_init() -> Self { ... }
+
+// 2. 创建初始任务上下文：ra 指向汇编入口 __restore_sp，sp 指向该程序的内核栈顶
+pub fn goto_restore(kstack_ptr: usize) -> Self {
+    extern "C" { fn __restore_sp(); }
+    Self {
+        ra: __restore_sp as usize,  // 任务第一次被调度时的跳转点
+        sp: kstack_ptr,             // 内核栈顶（其存放着第一次进入用户态所需的 TrapContext）
+        s: [0; 12],
+    }
+}
+```
+
+<Aside type="tip">
+fix_02.py `goto_restore` 非常巧妙！我们利用伪造了一个调用历史：当调度器第一次借由 `__switch` 切换到这个新任务时，执行到 `ret`（返回）指令，CPU 会取出 `ra` 中记录的值。这时程序就会执行到 `__restore_sp`，从内核栈取出初始化的 `TrapContext`，并顺势用 `sret` 退隐至用户态，开启美好的初次运行之旅。
+</Aside>
+
+---
+
+## `__switch` 寄存器换栈函数
+
+python3 fix_01.py  `kernel/src/task/switch.S`，同时在 `switch.rs` 有其外部声明：
+
+```rust
+extern "C" {
+    pub fn __switch(
+        current_task_cx_ptr: *mut TaskContext,
+        next_task_cx_ptr: *const TaskContext,
+    );
+}
+```
+
+### 为什么必须用汇编实现？
+
+python3 fix_01.py**硬核且精准**地去操作底层 CPU 寄存器，将状态保存到内存，再从另外一个内存块加载出别组寄存器。在高级语言像 Rust 里面这是不可能办到的：
+
+1. 高级语言的方法本身会自动更改寄存器（如存放局部变量），会直接污染即将保存现场。
+2. 我们需要精准、连续的操作，一旦编译器对代码进行了重新排版（指令重排），就会翻船。
+3. 关键是：在读取下一上下的 `ra` 和 `sp` 之后，流程已经神不知鬼不觉地去往了另一个任务里，再也不会回到 `__switch` 原始调用处！
+
+### `__switch` 逻辑执行流
+
+```text
+__switch(current_cx_ptr, next_cx_ptr):
+  1. 将当前的 ra, sp, s0-s11 压入到 *current_cx_ptr（当前换出任务 TCB 中）
+  2. 从 *next_cx_ptr 将之前的 ra, sp, s0-s11 弹到真实的物理寄存器中（目标换入任务）
+  3. 执行 ret ← 惊心动魄的时刻来了，此时 ra 寄存器已经是 next 任务当时留下的地址，流程彻底转移！
+```
+
+---
+
+## 调度器入口：TaskManager 与全局单例
+
+fix_02.py fix_02.py --------枢：`TASK_MANAGER`。它通过 `lazy_static!` 宏在内核中全局存在。
+
+```rust
+pub struct TaskManager {
+    num_app: usize,
+    inner: UPSafeCell<TaskManagerInner>,
+}
+
+pub struct TaskManagerInner {
+    tasks: [TaskControlBlock; MAX_APP_NUM],
+    current_task: usize,
+}
+```
+
+### 为什么需要 `UPSafeCell`？
+
+ Rust 的过程中，不可变引用（`&T`）和可变引用（`&mut T`）的排他性规则已经让你记忆犹新。
+fix_02.py **修改**其内部的状态（如切换当前任务、更改 TCB 状态），但全局单例拿到的往往是不可变引用 `&TaskManager`。
+
+#python3 fix_01.
+ `UPSafeCell`。在单核操作系统（Uniprocessor，UP）环境下，我们不担心多核并发导致的问题，只需在运行时借助内部可变性屏蔽掉 Rust 在编译期的借用检查。
+
+```rust
+// 获取调度器内部锁！
+let mut inner = self.inner.exclusive_access(); 
+inner.tasks[current].task_status = TaskStatus::Exited;
+// 退出作用域或显式调用 drop(inner) 时，释放掉特权
+```
+
+<Aside type="caution">
+**核心陷阱**：在发起 `__switch` 调用前，你**务必**主动执行 `drop(inner)`！
+ `inner` 越过 `__switch` 跑去别的地方，等下个时间片切回来的时候，极大概率会触发 `already borrowed` 从内核 panic！
+</Aside>
+
+---
+
+## 寻找与切换：`find_next_task` 与 `run_next_task`
+
+#fix_02.py 
+python3 fix_01.Round-Robin）调度算法的身影：
+
+```rust
+fn find_next_task(&self) -> Option<usize> {
+    let inner = self.inner.exclusive_access();
+    let current = inner.current_task;
+    (current + 1..current + self.num_app + 1)
+        .map(|id| id % self.num_app)
+        .find(|id| inner.tasks[*id].task_status == TaskStatus::Ready)
+}
+```
+
+python3 fix_01.py .devcontainer 2025s-rcore-wdlin233 fix_01.py fix_02.py musl package-lock.json ustb-os-kernel ustb-os-tutorial  `Ready` 状态的任务就抛出来！
+
+fix_01.py  python3 `run_next_task` 开始转移 CPU 权力：
+
+```rust
+fn run_next_task(&self) {
+    if let Some(next) = self.find_next_task() {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[next].task_status = TaskStatus::Running; // 改变即将接班孩子的状态为运行
+        inner.current_task = next;
+        
+        let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut _;
+        let next_task_cx_ptr   = &inner.tasks[next].task_cx as *const _;
+        
+        drop(inner);  // ← 千万记住在进入暗影裂口前解除封印！
+        unsafe { __switch(current_task_cx_ptr, next_task_cx_ptr); }
+    } else {
+        panic!("All applications completed!");
+    }
+}
+```

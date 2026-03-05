@@ -1,0 +1,159 @@
+---
+title: 地址空间——概述与 SV39 原理
+description: 第四章 地址空间实验概述，虚拟内存的必要性与 RISC-V SV39 分页机制原理。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 为什么需要地址空间？
+
+--------，所有用户程序被预先加载到物理内存的固定位置
+`APP_BASE_ADDRESS + i * APP_SIZE_LIMIT`），存在以下根本性缺陷：
+
+| 问题 | 说明 |
+|------|------|
+| **隔离性差** | 程序可以直接读写其他程序或内核的内存地址 |
+| **大小受限** | 每个程序的大小上限固定为 `APP_SIZE_LIMIT` |
+| **地址固定** | 程序必须在链接时知道自己的绝对物理地址，无法复用 |
+| **碎片化** | 随应用增删，物理内存出现难以利用的碎片 |
+
+**地址空间（Address Space）** 通过在每个程序和物理内存之间引入一层**虚拟地址到
+**，解决上述所有问题：每个程序都"以为"自己独占整个虚拟地址空间，
+
+
+---
+
+## RISC-V SV39 分页方案
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  ustb-os-kernel RISC-V 的 **SV39** 分页模式（Sv39 = Supervisor mode, 39-bit virtual）：
+
+### 地址位宽
+
+```
+63          39 38                          12 11          0
+          ┌─────────────┬──────────────────────────────┬─────────────┐
+          │  符号扩展位  │        虚拟页号 VPN[27:0]      │  页内偏移   │
+          │   (25位)     │   VPN[2]  VPN[1]  VPN[0]      │   (12位)   │
+          └─────────────┴──────────────────────────────┴─────────────┘
+                          9位       9位       9位
+
+55                                          12 11          0
+          ┌────────────────────────────────────────────┬─────────────┐
+          │            物理页号 PPN[43:0]               │  页内偏移   │
+          │                   (44位)                    │   (12位)   │
+          └────────────────────────────────────────────┴─────────────┘
+```
+
+<Aside type="note">
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial  39 位有效，其余高位必须是第 38 位的符号扩展（全 0 或全 1），
+ CPU 会触发异常。这正是为什么内核地址空间被放在高地址（全 1 扩展），
+ 0 扩展）。
+</Aside>
+
+### 页的大小
+
+ **4 KiB = 4096 字节 = 2^12 字节**，因此偏移占 12 位。
+
+```rust
+pub const PAGE_SIZE: usize = 0x1000;       // 4096
+pub const PAGE_SIZE_BITS: usize = 0xc;    // 12
+```
+
+### 三级页表结构
+
+SV39 使用**三级页表**，虚拟页号被分成三段，每段 9 位，作为各级页表的索引：
+
+```
+       VPN = [ VPN[2] | VPN[1] | VPN[0] ]
+                  9位       9位       9位
+
+
+  satp.root_ppn
+       │
+       ▼
+  一级页表（512项）
+  [VPN[2]] → PPN_1
+                 │
+                 ▼
+            二级页表（512项）
+            [VPN[1]] → PPN_2
+                           │
+                           ▼
+                      三级页表（512项）
+                      [VPN[0]] → 目标 PPN
+                                       │
+                                       ▼
+                                  物理地址 = PPN << 12 | 页内偏移
+```
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-512项 × 8字节 = 4096字节），
+ 512 × 512 × 512 × 4KiB = **256 GiB** 的虚拟地址空间。
+
+---
+
+## satp 寄存器：开启分页
+
+CPU 通过 `satp` CSR（Supervisor Address Translation and Protection）控制分页：
+
+```
+satp[63:60] = 8    → 启用 SV39 分页模式
+satp[43:0]  = PPN  → 根页表的物理页号
+```
+
+ Rust 代码中对应：
+
+```rust
+pub fn token(&self) -> usize {
+    8usize << 60 | self.root_ppn.0
+}
+
+pub fn activate(&self) {
+    let satp = self.page_table.token();
+    unsafe {
+        satp::write(satp);
+        asm!("sfence.vma");  // 刷新 TLB
+    }
+}
+```
+
+<Aside type="caution">
+ `satp` 后，必须立即执行 `sfence.vma` 指令刷新 TLB（地址转换缓存），
+ CPU 可能仍使用旧的缓存映射，导致错误的地址翻译。
+</Aside>
+
+---
+
+## 本章地址空间布局
+
+### 用户地址空间
+
+```
+0xFFFF_FFFF_FFFF_F000  ┌──────────────────┐ TRAMPOLINE（跳板页，只读执行）
+0xFFFF_FFFF_FFFF_E000  ├──────────────────┤ TrapContext（陷阱上下文）
+                       │                  │
+                       │   (unmapped)     │
+                       │                  │
+user_stack_top         ├──────────────────┤ 用户栈
+user_stack_bottom      ├──────────────────┤ 保护页（guard page，不映射）
+                       ├──────────────────┤ 程序数据段
+                       ├──────────────────┤ 程序只读段
+0x0000_0000_0000_0000  ├──────────────────┤ 程序代码段（ELF 入口点）
+```
+
+### 内核地址空间
+
+```
+0xFFFF_FFFF_FFFF_F000  ┌──────────────────┐ Trampoline（与物理地址对齐）
+                       │    MMIO 寄存器    │ 恒等映射
+                       │    物理内存       │ 恒等映射
+                       │    .bss/.data     │ 恒等映射
+                       │    .rodata        │ 恒等映射
+                       │    .text          │ 恒等映射（只读执行）
+```
+
+<Aside type="tip">
+**跳板页（Trampoline）** 是内核和所有用户程序地址空间中都映射到同一物理地址的特殊页。
+#
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel/  ustb-os-tutorial Trap 从用户态切换到内核态时，CPU 会切换页表，
+`__alltraps` 和 `__restore` 代码。
+</Aside>

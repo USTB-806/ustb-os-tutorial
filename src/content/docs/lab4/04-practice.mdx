@@ -1,0 +1,179 @@
+---
+title: 实验任务：实现三级页表核心函数
+description: 阅读代码、理解 SV39 三级页表结构，补全 find_pte_create / find_pte / map / unmap 四个函数。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 实验前置要求
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  ustb-os-kernel/
+
+- 理解 SV39 三级页表的查找过程（[地址空间概述](/ustb-os-tutorial/lab4/01-overview/) 中的"三级页表结构"一节）；
+- 理解 `VirtPageNum::indexes()` 如何将 VPN 分解为三级索引（[地址类型详解](/ustb-os-tutorial/lab4/02-address-and-frame/)）；
+- 阅读 [页表实现分析](/ustb-os-tutorial/lab4/03-page-table/) 中对四个挖空函数的伪代码描述；
+- 理解 `FrameTracker`/`frame_alloc()` 的使用方式。
+
+---
+
+## 问题描述
+
+ `kernel/src/mm/page_table.rs`，你会看到四个函数均以 `todo!` 宏标记：
+
+```rust
+fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+    todo!("Lab 4: implement find_pte_create")
+}
+
+fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+    todo!("Lab 4: implement find_pte")
+}
+
+pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
+    todo!("Lab 4: implement map")
+}
+
+pub fn unmap(&mut self, vpn: VirtPageNum) {
+    todo!("Lab 4: implement unmap")
+}
+```
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-kernel .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial Ustb
+ panic。
+
+---
+
+## 分析引导
+
+**第一步：理解可用的 API。**
+
+#
+--------找到并阅读以下函数/方法：
+
+- `VirtPageNum::indexes(&self) -> [usize; 3]` —— 分解三级索引
+- `PhysPageNum::get_pte_array(&self) -> &'static mut [PageTableEntry]` —— 将物理页视为 512 项 PTE 数组
+- `PageTableEntry::new(ppn: PhysPageNum, flags: PTEFlags) -> Self` —— 构造 PTE
+- `PageTableEntry::empty() -> Self` —— 构造空（无效）PTE  
+- `PageTableEntry::ppn(&self) -> PhysPageNum` —— 从 PTE 中提取 PPN
+- `PageTableEntry::is_valid(&self) -> bool` —— 判断 PTE 是否有效
+- `frame_alloc() -> Option<FrameTracker>` —— 分配一个物理帧
+- `self.frames: Vec<FrameTracker>` —— `PageTable` 中保存所有中间节点帧的字段
+
+**第二步：逐函数推导实现。**
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial 
+
+ `find_pte_create`：
+- 我已知根页表的 `root_ppn`，如何从中取出索引为 `i0` 的 PTE？
+- 该 PTE 有效时，下一步是什么？无效时，需要做什么？
+- 分配的新帧需要如何保存，才不会在函数返回后被立刻释放？
+- 前两级循环结束后，第三级应该怎么返回？
+
+ `find_pte`：
+- 与 `find_pte_create` 相比，哪些代码路径可以删去？
+- 遍历过程中遇到无效 PTE 时应该返回什么？
+
+ `map`：
+- 需要先调用哪个函数找到叶子节点？
+- 写入 PTE 时，`flags` 参数需要额外 OR 上哪个标志位？
+
+ `unmap`：
+- 需要先调用哪个函数找到叶子节点？
+- 如何让一个 PTE 变为"无效"状态？
+
+**第三步：关注 Rust 借用问题。**
+
+`find_pte_create` 和 `find_pte` 都涉及在循环中通过 `ppn` 访问物理内存，
+ PTE 继续查找。由于 `get_pte_array()` 返回 `'static` 引用，
+#.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel -os-
+#
+ `ppn`。
+
+---
+
+## 实验任务
+
+`kernel/src/mm/page_table.rs` 中的以下四个函数：
+
+1. `find_pte_create`：三级页表遍历，不存在的中间节点自动分配
+2. `find_pte`：三级页表遍历，不存在时返回 `None`
+3. `map`：利用 `find_pte_create` 建立 VPN → PPN 映射
+4. `unmap`：利用 `find_pte` 清零叶子 PTE
+
+<Aside type="caution">
+**不要采用试错式编程。** 每个函数的逻辑都应当从对三级页表结构的理解中推导得出。
+--------）写出伪代码，再翻译为 Rust 实现。
+
+#
+#
+ `find_pte_create` 未正确保留新分配帧的所有权，
+
+</Aside>
+
+---
+
+## 验证
+
+### 方法一：`remap_test`
+
+`mm::init()` 之后）会调用 `remap_test()`，该函数验证内核地址空间的
+#
+
+
+```rust
+pub fn remap_test() {
+    let kernel_space = KERNEL_SPACE.exclusive_access();
+    let mid_text = ...; // .text 段中间某虚拟地址
+    // .text 段不可写
+    assert!(!kernel_space.page_table.translate(mid_text.floor()).unwrap().writable());
+    // .rodata 段不可写
+    assert!(!kernel_space.page_table.translate(mid_rodata.floor()).unwrap().writable());
+    // .data 段不可执行
+    assert!(!kernel_space.page_table.translate(mid_data.floor()).unwrap().executable());
+    println!("remap_test passed!");
+}
+```
+
+#.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial 
+
+
+```
+remap_test passed!
+```
+
+### 方法二：运行 `mmap` 测试程序
+
+.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  ustb-os- `ch4_mmap0`，预期输出：
+
+```
+Test 04_1 OK!
+```
+
+`ch4_mmap1` 和 `ch4_mmap2` 测试错误权限的访问，预期行为是：
+**不**打印 "Should cause error" 行。
+
+### 方法三：运行 `ch4_usertest`
+
+```
+ch4_usertest 运行完成，所有子测试通过
+```
+
+---
+
+## 思考题（选做）
+
+1. `find_pte_create` 中，为什么在分配新帧后要将 `FrameTracker` 存入
+   `self.frames`？如果只写 `let frame = frame_alloc().unwrap();` 而不保存，
+   会发生什么？在什么时候会出现错误？
+
+2. SV39 中叶子 PTE 的 R/W/X 至少一位为 1，否则 CPU 无法区分叶子和中间节点。
+   如果用户调用 `mmap(addr, len, 0)`（即 `prot = 0`，R/W/X 均为 0），查看
+   `MapPermission::from_port` 的实现，思考内核会如何处理？
+
+3. 当前的三级页表中，若某个中间节点下只有一个有效映射，`unmap` 删除该映射后，
+   中间节点的页表帧并**不会**被立即释放（因为它在 `self.frames` 中）。这会导致
+   什么问题？在什么场景下会出现？内核目前是如何处理的？
+
+4. `translated_byte_buffer` 函数支持跨页的用户缓冲区（缓冲区可以跨越多个虚拟页）。
+   阅读该函数的实现，说明它是如何将跨页的虚拟地址区间翻译为一个物理页切片列表的，
+   并解释内核使用这种方式而非直接访问虚拟地址的原因。
