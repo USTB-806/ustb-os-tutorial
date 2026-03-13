@@ -3,7 +3,14 @@ title: 练习
 description: lab2 练习，硬编码 sys_write 和 C Lib 支持
 ---
 
-执行 `user/c/apps/read.c` 程序，尝试让其输出 `Read content: Success!`.
+首先克隆实验代码：
+
+```shell
+git clone https://github.com/USTB-806/ustb-os-kernel.git
+git checkout lab2
+```
+
+本章的练习是：成功执行 `user/c/apps/read.c` 程序，尝试让其输出 `Read content: Success!`.
 
 你可能注意到了 commit 记录里 `user/c/lib/lib.h` 的添加：
 
@@ -21,14 +28,14 @@ isize read(int fd, void *buf, size_t count);
 
 除此之外，你可以关注 `kernel/src/syscall/fs.rs` 这个文件，这是文件相关 syscalls 被定义处，尝试修改 syscalls 让 `read.c` 正常输出.
 
-另外，如果想要运行本地测试，而不是重复云端评测，可以：
+另外，我们建议通过本地测试后，再提交至云端进行评测，你可以通过 `stdout-ch2` 看到测评的整个流程. 执行：
 
-```
+```shell
 cd ustb-os-kernel
 git clone https://github.com/USTB-806/ustb-os-checker.git
 
 cd ustb-os-checker
-python3 test_runner.py 2
+make test CHAPTER=2
 ```
 
-意为运行第 2 章的测试.
+其中 `CHAPTER=2` 意为运行第 2 章的测试.
