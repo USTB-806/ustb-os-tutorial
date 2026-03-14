@@ -3,15 +3,20 @@ title: 练习
 description: lab1 rustlings 练习
 ---
 
+## 运行程序
+
 执行如下命令：
 
 ```shell
 git clone https://github.com/Source-of-USTB/ustb-os-rustlings.git
 ```
 
+需要安装 Rust 环境，或者使用 Docker 镜像，将 `ustb-os-rustlings` 挂载.
+
 进入项目目录后，再执行：
 
 ```shell
+# 注意 . 是当前目录
 cargo install --force --path .
 ```
 
@@ -20,3 +25,16 @@ cargo install --force --path .
 每完成一道习题，需要删除注释 `// I AM NOT DONE`，否则该题不会被标记为完成.
 
 直至所有练习完成，提交希冀评测.
+
+## 提交评测
+
+将项目打包为 `.tar.gz` 的格式.
+
+```shell
+cd /path/to/ustb-os-rustlings
+tar -czf ../ustb-os-rustlings.tar.gz .
+```
+
+将会在 rustlings 的**上级目录**生成一个 `ustb-os-rustlings.tar.gz` 文件，压缩包的内容是 rustlings 目录的文件.
+
+然后提交 `.tar.gz` 文件到 CG 进行评测.

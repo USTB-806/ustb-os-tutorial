@@ -4,4 +4,49 @@ description: 如何评测
 template: doc
 ---
 
-TODO
+由于学校评测系统的限制，我们需要通过上传 `.tar.gz` 压缩包的方式进行评测.
+
+建议先在本地执行评测，然后再上传至 CG 系统.
+
+:::note
+若遇到任何评测机 RE 或者本地评测与云端不一致的情况，请联系助教进行修复.
+:::
+
+## Lab1 评测
+
+评测内容为执行 `rustlings verify`，根据通过 case 的数量进行计分. 
+
+若使用云端评测，需将项目打包为 `.tar.gz` 的格式.
+
+```shell
+cd /path/to/ustb-os-rustlings
+tar -czf ../ustb-os-rustlings.tar.gz .
+```
+
+将会在 rustlings 的**上级目录**生成一个 `ustb-os-rustlings.tar.gz` 文件，压缩包的内容是 rustlings 目录的文件.
+
+然后提交 `.tar.gz` 文件到 CG 进行评测.
+
+## Lab2~6 评测
+
+进入项目后，拉取测评机至与 `kernel` 和 `user` 同等目录的层级，然后执行 `make test`.
+
+具体而言执行如下语句，以执行 lab3 的测试为例：
+
+```shell
+cd /ustb-os-kernel
+git clone https://github.com/USTB-806/ustb-os-checker.git
+cd ustb-os-checker
+make test CHAPTER=3
+```
+
+其中运行结果将保存至 `stdout-ch3` 文件中.
+
+云端评测需要打包 `ustb-os-kernel`，执行：
+
+```shell
+cd ustb-os-kernel
+tar -czf ../submit.tar.gz --exclude='./ustb-os-checker' --exclude='./*/target' --exclude='./.git' .
+```
+
+然后将上级目录生成的 `submit.tar.gz` 上传至 CG.
