@@ -19,13 +19,13 @@ pub struct VirtPageNum(pub usize); // 虚拟页号 VPN（27位有效）
 ```
 
 ```
-        >> 12           &(PAGE_SIZE-1)
+        >> 12                           &(PAGE_SIZE-1)
 PhysAddr ──────► PhysPageNum      PhysAddr ─────────► 页内偏移
   ▲                  │
   │ << 12            │
   └──────────────────┘
 
-        >> 12
+        >> 12                           &(PAGE_SIZE-1)
 VirtAddr ──────► VirtPageNum      VirtAddr ─────────► 页内偏移
   ▲                  │
   │ << 12            │
@@ -120,8 +120,8 @@ Rust 借用检查器无法推断跨物理内存访问的生命周期。使用者
 
 
   内核代码数据  │         空闲物理帧（供分配）               │
-  [0, ekernel)│         [ekernel_ceil, MEMORY_END)        │
-
+  [0, ekernel) │         [ekernel_ceil, MEMORY_END)       │
+               |
                 ↑
              初始 current
 
