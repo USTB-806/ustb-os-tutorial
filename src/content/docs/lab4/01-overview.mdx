@@ -142,6 +142,11 @@ user_stack_bottom      ├──────────────────
 注意这并不是一个合理的内存地址空间布局（至少没有heap空间），但是我们目前的os不追求太全面，而是为了让大家理解**虚拟地址空间**。
 :::
 
+
+- `TRAMPOLINE = usize::MAX - PAGE_SIZE + 1`，因此位于最高虚拟页（`0xFFFF_FFFF_FFFF_F000`）。
+- `TRAP_CONTEXT_BASE = TRAMPOLINE - PAGE_SIZE`，因此 TrapContext 紧贴在 Trampoline 下方一页（`0xFFFF_FFFF_FFFF_E000`）。
+- 用户栈来自 `from_elf` 的 `user_stack_bottom..user_stack_top` 区间，并显式预留了一页 guard page（不映射）用于防止栈越界静默破坏内存。
+
 ### 内核地址空间
 
 ```
@@ -157,4 +162,11 @@ user_stack_bottom      ├──────────────────
 **跳板页（Trampoline）** 是内核和所有用户程序地址空间中都映射到同一物理地址的特殊页。
 当 Trap 从用户态切换到内核态时，CPU 会切换页表，但这不影响
 `__alltraps` 和 `__restore` 代码。
+
+更具体地说：
+1. 进入用户态前，内核把 `stvec` 设为 `TRAMPOLINE`，因此一旦用户态发生异常/中断，硬件总是先跳到这页中的 `__alltraps`。
+2. `__alltraps` 会先保存寄存器，再切换到内核页表与内核栈，随后进入 Rust 的 `trap_handler`。
+3. 返回用户态时，`trap_return` 计算 `__restore` 在 Trampoline 页内的虚拟地址并跳转执行，最后 `sret` 回到用户程序。
+
+之所以必须“内核页表和用户页表都映射同一跳板页”，是为了保证页表切换前后，Trap 入口/出口代码始终可取指执行，不会在最关键的过渡瞬间丢失执行流。
 </Aside>
