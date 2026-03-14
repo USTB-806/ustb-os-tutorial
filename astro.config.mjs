@@ -5,6 +5,23 @@ import starlightThemeNova from 'starlight-theme-nova';
 
 // https://astro.build/config
 export default defineConfig({
+	server: {
+		host: true,  // 等同于 --host
+		port: 4321,
+	},
+	vite: {
+		server: {
+			hmr: {
+				host: 'localhost',
+				port: 4321,
+				protocol: 'ws',
+			},
+			watch: {
+				usePolling: true,
+				interval: 1000,
+			},
+		},
+	},
 	site: 'https://USTB-806.github.io',
 	base: '/ustb-os-tutorial',
 	trailingSlash: "always",

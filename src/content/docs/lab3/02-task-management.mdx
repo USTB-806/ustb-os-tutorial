@@ -3,48 +3,15 @@ title: 任务管理核心代码分析
 description: TaskControlBlock、TaskContext、TaskManager 及 __switch 函数的深度解析。
 ---
 
+除了前面提到的TCB之外，还有一些你需要知道的结构体
+
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 
-#
-#python3 fix_
-fix_02.py --------，看看系统是如何**描述**一个任务，并实现这些任务间的**切换**与**管理**的。
-
-## 任务控制块（TCB）
-
- `kernel/src/task/task.rs` 中定义的 `TaskControlBlock` 结构体：
-
-```rust
-#[derive(Copy, Clone)]
-pub struct TaskControlBlock {
-    pub task_status: TaskStatus,
-    pub task_cx: TaskContext,
-}
-
-#[derive(Copy, Clone, PartialEq)]
-pub enum TaskStatus {
-    UnInit,    // 未初始化
-    Ready,     // 就绪
-    Running,   // 运行中
-    Exited,    // 已退出
-}
-```
-
-`TaskControlBlock` (TCB) 是操作系统用来管理控制任务的最重要的数据结构。当前为了保持精简，它仅包含两个字段：
-- `task_status`：任务的当前状态，是调度器决定下一任务的关键；
-- `task_cx`：任务上下文，用于保存任务被切换出去时 CPU 寄存器的快照环境，当任务恢复时再原样读回。
-
-<Aside type="note">
- `#[derive(Copy, Clone)]`。这说明 TCB 在现阶段可以按位复制。这是因为目前内核使用静态数组存储所有 TCB，没有涉及复杂的堆分配和所有权转移。未来如果我们要实现更复杂的任务模型（比如动态的进程资源），可能就需要去掉它。
-</Aside>
-
----
-
 ## 任务上下文（TaskContext）
 
-python3 fix_01.py  `kernel/src/task/context.rs`：
-
 ```rust
+//kernel/src/task/context.rs
 #[repr(C)]
 pub struct TaskContext {
     ra: usize,       // 返回地址寄存器
@@ -52,10 +19,16 @@ pub struct TaskContext {
     s: [usize; 12],  // callee-saved 寄存器 s0–s11
 }
 ```
+:::note
+为什么要有任务上下文？
+
+因为在本章开始我们使用时间片轮转的方式运行程序，那么没有执行完的程序被切换走了该如何切换回来？我怎么知道它被切换到哪里了？
+我怎么知道它被切换走时候的寄存器状态？任务上下文就是用来保存这些信息的。
+:::
 
 ### 为什么只需要保存这些寄存器？
 
-fix_02.py  RISC-V 函数调用约定（ABI）决定的，寄存器分为两类：
+RISC-V 函数调用约定（ABI）决定的，寄存器分为两类：
 
 | 类别 | 寄存器 | 负责方 | 是否需要保存到 TaskContext |
 |------|--------|--------|--------------------------|
@@ -84,14 +57,14 @@ pub fn goto_restore(kstack_ptr: usize) -> Self {
 ```
 
 <Aside type="tip">
-fix_02.py `goto_restore` 非常巧妙！我们利用伪造了一个调用历史：当调度器第一次借由 `__switch` 切换到这个新任务时，执行到 `ret`（返回）指令，CPU 会取出 `ra` 中记录的值。这时程序就会执行到 `__restore_sp`，从内核栈取出初始化的 `TrapContext`，并顺势用 `sret` 退隐至用户态，开启美好的初次运行之旅。
+ `goto_restore` 非常巧妙！我们利用伪造了一个调用历史：当调度器第一次借由 `__switch` 切换到这个新任务时，执行到 `ret`（返回）指令，CPU 会取出 `ra` 中记录的值。这时程序就会执行到 `__restore_sp`，从内核栈取出初始化的 `TrapContext`，并顺势用 `sret` 退隐至用户态，开启美好的初次运行之旅。
 </Aside>
 
 ---
 
 ## `__switch` 寄存器换栈函数
 
-python3 fix_01.py  `kernel/src/task/switch.S`，同时在 `switch.rs` 有其外部声明：
+`kernel/src/task/switch.S`，同时在 `switch.rs` 有其外部声明：
 
 ```rust
 extern "C" {
@@ -104,11 +77,11 @@ extern "C" {
 
 ### 为什么必须用汇编实现？
 
-python3 fix_01.py**硬核且精准**地去操作底层 CPU 寄存器，将状态保存到内存，再从另外一个内存块加载出别组寄存器。在高级语言像 Rust 里面这是不可能办到的：
+**硬核且精准**地去操作底层 CPU 寄存器，将状态保存到内存，再从另外一个内存块加载出别组寄存器。在高级语言像 Rust 里面这是不可能办到的：
 
 1. 高级语言的方法本身会自动更改寄存器（如存放局部变量），会直接污染即将保存现场。
 2. 我们需要精准、连续的操作，一旦编译器对代码进行了重新排版（指令重排），就会翻船。
-3. 关键是：在读取下一上下的 `ra` 和 `sp` 之后，流程已经神不知鬼不觉地去往了另一个任务里，再也不会回到 `__switch` 原始调用处！
+3. 关键是：在读取下一个任务上下文的 `ra` 和 `sp` 之后，流程已经神不知鬼不觉地去往了另一个任务里，再也不会回到 `__switch` 原始调用处！
 
 ### `__switch` 逻辑执行流
 
@@ -123,7 +96,7 @@ __switch(current_cx_ptr, next_cx_ptr):
 
 ## 调度器入口：TaskManager 与全局单例
 
-fix_02.py fix_02.py --------枢：`TASK_MANAGER`。它通过 `lazy_static!` 宏在内核中全局存在。
+`TASK_MANAGER`通过 `lazy_static!` 宏在内核中全局存在。
 
 ```rust
 pub struct TaskManager {
@@ -140,10 +113,9 @@ pub struct TaskManagerInner {
 ### 为什么需要 `UPSafeCell`？
 
  Rust 的过程中，不可变引用（`&T`）和可变引用（`&mut T`）的排他性规则已经让你记忆犹新。
-fix_02.py **修改**其内部的状态（如切换当前任务、更改 TCB 状态），但全局单例拿到的往往是不可变引用 `&TaskManager`。
+`TaskManagerInner`是为了**修改**其内部的状态（如切换当前任务、更改 TCB 状态），但全局单例拿到的往往是不可变引用 `&TaskManager`。
 
-#python3 fix_01.
- `UPSafeCell`。在单核操作系统（Uniprocessor，UP）环境下，我们不担心多核并发导致的问题，只需在运行时借助内部可变性屏蔽掉 Rust 在编译期的借用检查。
+在单核操作系统（Uniprocessor，UP）环境下，我们不担心多核并发导致的问题，只需在运行时借助内部可变性屏蔽掉 Rust 在编译期的借用检查。
 
 ```rust
 // 获取调度器内部锁！
@@ -161,8 +133,10 @@ inner.tasks[current].task_status = TaskStatus::Exited;
 
 ## 寻找与切换：`find_next_task` 与 `run_next_task`
 
-#fix_02.py 
-python3 fix_01.Round-Robin）调度算法的身影：
+
+### 1. 任务调度算法：`find_next_task`
+**执行调度策略，决定下一个要运行的任务**。
+**时间片轮转（Round-Robin）调度**，由于其公平性的特点，该函数采用了非常简单的逻辑：从当前任务编号开始向后递增做环状遍历，在任务列表内一旦找到第一个状态标记为 `TaskStatus::Ready`（也就是就绪状态，没被投入运行，也没在等待或退出）的任务即将其返回。如果未找到则说明当前不可继续分发，所有应用已经跑完。
 
 ```rust
 fn find_next_task(&self) -> Option<usize> {
@@ -174,9 +148,11 @@ fn find_next_task(&self) -> Option<usize> {
 }
 ```
 
-python3 fix_01.py .devcontainer 2025s-rcore-wdlin233 fix_01.py fix_02.py musl package-lock.json ustb-os-kernel ustb-os-tutorial  `Ready` 状态的任务就抛出来！
-
-fix_01.py  python3 `run_next_task` 开始转移 CPU 权力：
+### 2. 任务分发与上下文切换：`run_next_task`
+**完成新旧任务之间的承接和硬件级别的上下文状态转换**。
+ `find_next_task` 并确认得到接班人的任务编号后，它会负责两件最关键的事：
+- **状态跟进**：它将即将跑起来的新任务的状态设为 `Running`，同时将调度器的“当前记录项”设定为该名继任者的编号。
+- **锁释放与切换调用**：最容易踩坑的就是在进入底层指令 `__switch`（即正式汇编切换去下一个寄存器状态）前，我们要立刻手动使用 `drop(inner)` **提前释放**任务管理器大锁。因为一旦完成切换便进入了那个任务的执行流，若带着锁离开，其他系统调用再访问任务管理器就会面临“锁不可用”直接导致系统死锁甚至崩溃。
 
 ```rust
 fn run_next_task(&self) {

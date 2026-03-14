@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## 实验前置要求
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  ustb-os-kernel/
+ustb-os-kernel/
 
 - 理解 SV39 三级页表的查找过程（[地址空间概述](/ustb-os-tutorial/lab4/01-overview/) 中的"三级页表结构"一节）；
 - 理解 `VirtPageNum::indexes()` 如何将 VPN 分解为三级索引（[地址类型详解](/ustb-os-tutorial/lab4/02-address-and-frame/)）；
@@ -38,8 +38,7 @@ pub fn unmap(&mut self, vpn: VirtPageNum) {
 }
 ```
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-kernel .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial Ustb
- panic。
+ustb-os-kernel ustb-os-tutorial 否则将导致系统 panic。
 
 ---
 
@@ -47,8 +46,7 @@ pub fn unmap(&mut self, vpn: VirtPageNum) {
 
 **第一步：理解可用的 API。**
 
-#
---------找到并阅读以下函数/方法：
+你需要找到并阅读以下函数/方法：
 
 - `VirtPageNum::indexes(&self) -> [usize; 3]` —— 分解三级索引
 - `PhysPageNum::get_pte_array(&self) -> &'static mut [PageTableEntry]` —— 将物理页视为 512 项 PTE 数组
@@ -61,7 +59,7 @@ pub fn unmap(&mut self, vpn: VirtPageNum) {
 
 **第二步：逐函数推导实现。**
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial 
+ustb-os-tutorial 
 
  `find_pte_create`：
 - 我已知根页表的 `root_ppn`，如何从中取出索引为 `i0` 的 PTE？
@@ -85,8 +83,7 @@ pub fn unmap(&mut self, vpn: VirtPageNum) {
 
 `find_pte_create` 和 `find_pte` 都涉及在循环中通过 `ppn` 访问物理内存，
  PTE 继续查找。由于 `get_pte_array()` 返回 `'static` 引用，
-#.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel -os-
-#
+#-os-
  `ppn`。
 
 ---
@@ -102,10 +99,8 @@ pub fn unmap(&mut self, vpn: VirtPageNum) {
 
 <Aside type="caution">
 **不要采用试错式编程。** 每个函数的逻辑都应当从对三级页表结构的理解中推导得出。
---------）写出伪代码，再翻译为 Rust 实现。
+请先（在纸上或脑海中）写出伪代码，再翻译为 Rust 实现。
 
-#
-#
  `find_pte_create` 未正确保留新分配帧的所有权，
 
 </Aside>
@@ -117,7 +112,6 @@ pub fn unmap(&mut self, vpn: VirtPageNum) {
 ### 方法一：`remap_test`
 
 `mm::init()` 之后）会调用 `remap_test()`，该函数验证内核地址空间的
-#
 
 
 ```rust
@@ -134,7 +128,7 @@ pub fn remap_test() {
 }
 ```
 
-#.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial 
+#ustb-os-tutorial 
 
 
 ```
@@ -143,7 +137,7 @@ remap_test passed!
 
 ### 方法二：运行 `mmap` 测试程序
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  ustb-os- `ch4_mmap0`，预期输出：
+ustb-os- `ch4_mmap0`，预期输出：
 
 ```
 Test 04_1 OK!

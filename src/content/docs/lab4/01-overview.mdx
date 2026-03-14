@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## 为什么需要地址空间？
 
---------，所有用户程序被预先加载到物理内存的固定位置
+在前面的实验中，所有用户程序被预先加载到物理内存的固定位置（
 `APP_BASE_ADDRESS + i * APP_SIZE_LIMIT`），存在以下根本性缺陷：
 
 | 问题 | 说明 |
@@ -17,15 +17,14 @@ import { Aside } from '@astrojs/starlight/components';
 | **地址固定** | 程序必须在链接时知道自己的绝对物理地址，无法复用 |
 | **碎片化** | 随应用增删，物理内存出现难以利用的碎片 |
 
-**地址空间（Address Space）** 通过在每个程序和物理内存之间引入一层**虚拟地址到
-**，解决上述所有问题：每个程序都"以为"自己独占整个虚拟地址空间，
+**地址空间（Address Space）** 通过在每个程序和物理内存之间引入一层**虚拟地址到物理地址的映射**，解决上述所有问题：每个程序都"以为"自己独占整个虚拟地址空间，
 
 
 ---
 
 ## RISC-V SV39 分页方案
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  ustb-os-kernel RISC-V 的 **SV39** 分页模式（Sv39 = Supervisor mode, 39-bit virtual）：
+本章采用 RISC-V 的 **SV39** 分页模式（Sv39 = Supervisor mode, 39-bit virtual）：
 
 ### 地址位宽
 
@@ -45,9 +44,8 @@ import { Aside } from '@astrojs/starlight/components';
 ```
 
 <Aside type="note">
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial  39 位有效，其余高位必须是第 38 位的符号扩展（全 0 或全 1），
- CPU 会触发异常。这正是为什么内核地址空间被放在高地址（全 1 扩展），
- 0 扩展）。
+虽然虚拟地址是 64 位，但在 SV39 模式下只有低 39 位有效，其余高位必须是第 38 位的符号扩展（全 0 或全 1），
+否则 CPU 会触发异常。这正是为什么内核地址空间被放在高地址（全 1 扩展），而用户地址空间被放在低地址（全 0 扩展）。
 </Aside>
 
 ### 页的大小
@@ -153,7 +151,6 @@ user_stack_bottom      ├──────────────────
 
 <Aside type="tip">
 **跳板页（Trampoline）** 是内核和所有用户程序地址空间中都映射到同一物理地址的特殊页。
-#
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel/  ustb-os-tutorial Trap 从用户态切换到内核态时，CPU 会切换页表，
+当 Trap 从用户态切换到内核态时，CPU 会切换页表，但这不影响
 `__alltraps` 和 `__restore` 代码。
 </Aside>

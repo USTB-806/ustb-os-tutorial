@@ -28,7 +28,6 @@ RISC-V SV39 规定，每个页表项为 8 字节（64位）：
 | A | Accessed —— 硬件置位，表示页最近被访问过 |
 | D | Dirty —— 硬件置位，表示页最近被写过 |
 
-#
 
 
 ```rust
@@ -98,14 +97,14 @@ fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
 ```
 
 **作用**：找到 VPN 对应的叶子 PTE 的可变引用。若中间节点不存在，**分配新的物理帧**
---------间节点 PTE（V 位置 1，PPN 指向新帧）。
+并初始化作为中间节点 PTE（V 位置 1，PPN 指向新帧）。
 
 **遍历过程（逐级下沉）：**
 
 ```
 vpn.indexes() = [i0, i1, i2]   // [VPN[2], VPN[1], VPN[0]]
 
---------查找 i0
+1. 查找 i0
   ppn = self.root_ppn
   pte = ppn.get_pte_array()[i0]
   若 pte.is_valid() == false：
@@ -113,19 +112,19 @@ vpn.indexes() = [i0, i1, i2]   // [VPN[2], VPN[1], VPN[0]]
     将 frame 存入 self.frames（转移所有权）
   ppn = pte.ppn()   // 进入二级页表
 
---------查找 i1
+1. 查找 i1
   pte = ppn.get_pte_array()[i1]
   （同上，若不存在则分配新帧）
   ppn = pte.ppn()   // 进入三级页表
 
---------查找 i2
+1. 查找 i2
   pte = &mut ppn.get_pte_array()[i2]
   直接返回该 PTE 的可变引用（叶子节点，不判断 valid）
 ```
 
 <Aside type="note">
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial  V 位，**不设置 R/W/X/U** 标志——这标志着它是中间节点。
- PTE 的引用，不关心它是否 valid（由 `map` 来写入）。
+创建新节点时，我们仅置位 V 位，**不设置 R/W/X/U** 标志——这标志着它是中间节点。
+它会返回叶子节点 PTE 的引用，不关心它是否 valid（由 `map` 来写入）。
 </Aside>
 
 ### 2. `find_pte` —— 三级查找（只读）
@@ -214,7 +213,7 @@ pub fn unmap(&mut self, vpn: VirtPageNum)
 <Aside type="tip">
 `unmap` 只清零页表项，并**不**释放被映射的数据物理帧。数据帧的释放由
 `MapArea.data_frames` 中的 `FrameTracker` 负责（从 `BTreeMap` 中移除时自动析构）。
---------间节点的帧由 `PageTable.frames` 持有，直到整个 `PageTable` 销毁时释放。
+中间节点的帧由 `PageTable.frames` 持有，直到整个 `PageTable` 销毁时释放。
 </Aside>
 
 ---
@@ -271,4 +270,4 @@ pub fn translate_va(&self, va: VirtAddr) -> Option<PhysAddr> {
 ```
 
 `translated_byte_buffer` 通过上述接口，将用户程序传入的虚拟地址指针
---------的数据复制。
+实现用户物理页内的数据复制。
