@@ -103,11 +103,11 @@ pub enum TaskStatus {
 
 ## 两种调度触发路径
 
- CPU，直到其主动结束或者遇到错误。但在我们的分时操作系统中，有两种方式可以触发调度权的交接：**协作式调度**和**抢占式调度**。这两种机制都是通过操作系统中统一的 `suspend_current_and_run_next` 接口来实现上下文的切换。
+在我们的分时操作系统中，有两种方式可以触发调度权的交接：**协作式调度**和**抢占式调度**。这两种机制都是通过操作系统中统一的 `suspend_current_and_run_next` 接口来实现上下文的切换。
 
 ### 路径一：主动让出（协作式调度）
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-tutorial  .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial                                                          `yield` 系统调用，通知内核将自己挂起，主动让出 CPU 给下一个处于就绪状态的任务执行。-Kernel/
+ `yield` 系统调用，通知内核将自己挂起，主动让出 CPU 给下一个处于就绪状态的任务执行。
 
 
 ```text
@@ -122,11 +122,11 @@ pub enum TaskStatus {
 
 ### 路径二：时钟中断抢占（抢占式调度）
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os-tutorial .devcontainer 2025s-rcore-wdlin233 musl package-lock.json ustb-os-kernel ustb-os- CPU，系统将面临停滞危险。因此在分时多任务中，操作系统依赖硬件时钟中断（Timer Interrupt）周期性地打断当前任务，强行夺回控制权。通过设置固定长度的时间片，一旦定时倒计时结束，便会产生一次时钟中断触发 Trap，避免单个程序霸占系统。
+如果某个任务进入死循环或死锁且不主动让出 CPU，系统将面临停滞危险。因此在分时多任务中，操作系统依赖硬件时钟中断（Timer Interrupt）周期性地打断当前任务，强行夺回控制权。通过设置固定长度的时间片，一旦定时倒计时结束，便会产生一次时钟中断触发 Trap，避免单个程序霸占系统。
 
 
 ```text
---------断触发
+时钟中断触发
   → trap_handler (SupervisorTimer)
     → set_next_trigger()              ← 重新设置下一次中断
     → suspend_current_and_run_next()
@@ -138,7 +138,8 @@ pub enum TaskStatus {
 
 ## 本章重点内容
 
-.devcontainer 2025s-rcore-wdlin233 musl package-lock.json  -**重点内容**如下：
+
+**重点内容**如下：
 
 1. **时钟中断的配置与接收**：理解 RISC-V 中断的触发规律，掌握操作系统如何通过定时器夺回 CPU 掌控权。
 2. **核心数据结构抽象 (TaskControlBlock)**：理解任务控制块的数据形态与生命周期中的状态流转 (`UnInit`, `Ready`, `Running`, `Exited`)。
@@ -162,4 +163,4 @@ BBBBBBBBBB [2/5]
 ...
 ```
 
-**提示**：在目前的初版代码中，`mark_current_suspended` 未完全正确实现，导致程序 A 会由于状态没有变为 `Ready` 未被移出运行判断标准，把所有行全部打完后，B 和 C 才会被调度。解决此问题就是本章的最终目标之一。
+**提示**：在目前的初版代码中，某些函数未完全正确实现，导致程序 A B C 只会交替输出一遍，但正常应该是输出5遍。解决此问题就是本章的最终目标之一。
