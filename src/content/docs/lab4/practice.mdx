@@ -1,0 +1,39 @@
+---
+title: 练习
+description: 阅读代码、理解 SV39 三级页表结构，补全 find_pte_create / find_pte / map / unmap 四个函数。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+首先切换至 master 分支，实验 4, 5 和 6 均使用 master 分支进行实验.
+
+```shell
+git checkout master
+```
+
+在 `kernel/src/mm/page_table.rs` 中的以下四个函数均以 `todo!()` 标记：
+
+1. `find_pte_create`：三级页表遍历，不存在的中间节点自动分配
+2. `find_pte`：三级页表遍历，不存在时返回 `None`
+3. `map`：利用 `find_pte_create` 建立 VPN → PPN 映射
+4. `unmap`：利用 `find_pte` 清零叶子 PTE
+
+```rust
+fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+    todo!("Lab 4: implement find_pte_create")
+}
+
+fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+    todo!("Lab 4: implement find_pte")
+}
+
+pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
+    todo!("Lab 4: implement map")
+}
+
+pub fn unmap(&mut self, vpn: VirtPageNum) {
+    todo!("Lab 4: implement unmap")
+}
+```
+
+需要实现这些函数通过测评.

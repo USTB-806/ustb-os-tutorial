@@ -1,0 +1,74 @@
+---
+title: 练习
+description: 阅读代码、理解问题所在，并完成 mark_current_suspended 函数的实现。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 时间片轮转
+
+查看测试用例，你可以看到：
+
+```rust
+// user/rust/src/bin/ch3b_yield0.rs
+#[no_mangle]
+fn main() -> i32 {
+    for i in 0..HEIGHT {
+        let buf = ['A' as u8; WIDTH];
+        println!(
+            "{} [{}/{}]",
+            core::str::from_utf8(&buf).unwrap(),
+            i + 1,
+            HEIGHT
+        );
+        yield_();
+    }
+    println!("Test write A OK!");
+    0
+}
+```
+
+接下来请你通过**修改内核**来支持这个程序的执行. 在本章中用户程序不需要修改.
+
+正确的执行结果应该是：
+
+```text
+AAAAAAAAAA [1/5]
+BBBBBBBBBB [1/5]
+CCCCCCCCCC [1/5]
+AAAAAAAAAA [2/5]
+BBBBBBBBBB [2/5]
+CCCCCCCCCC [2/5]
+AAAAAAAAAA [3/5]
+...
+Test write A OK!
+Test write B OK!
+Test write C OK!
+All applications completed!
+```
+
+实现时间片轮转.
+
+## 支持 task_info 查询和 syscalls 统计
+
+然后你需要支持 `sys_trace`，当前虽然给出了代码实现，但是其调用的一些方法还不完善，请你实现 `get_current_task_info` 和 `get_total_syscall_count`. `get_total_syscall_count` 的返回值是当前 task 的所有 syscalls 的计数之和.
+
+同时，`sys_trace` 虽然应当返回 syscalls 的执行次数，但是目前统计 syscalls 调用次数的逻辑存在问题. 
+
+## 通过评测
+
+我们建议通过本地测试后，再提交至云端进行评测，你可以通过 `stdout-ch3` 看到测评的整个流程. 执行：
+
+```shell
+cd ustb-os-kernel
+git clone https://github.com/USTB-806/ustb-os-checker.git
+
+cd ustb-os-checker
+make test CHAPTER=3
+```
+
+其中 `CHAPTER=3` 意为运行第 3 章的测试.
+
+然后提交 `.tar.gz` 至 CG 平台. 
+
+

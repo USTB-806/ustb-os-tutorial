@@ -3,40 +3,71 @@ title: 练习
 description: lab6 练习
 ---
 
+在先前 Lab4 和 Lab5 的基础上继续添加功能.
+
 ## 当前的 I/O 实现
 
-内核目前支持的 I/O 操作仅限于标准输出的写入，通过 `sys_write` 系统调用实现。该系统调用定义在 `kernel/src/syscall/fs.rs` 中：
+内核目前支持的 I/O 操作仅限于标准输出的写入，通过 `sys_write` 系统调用实现. 该系统调用定义在 `kernel/src/syscall/fs.rs` 中：
 
 ```rust
 // kernel/src/syscall/fs.rs
-const FD_STDOUT: usize = 1;
-
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     match fd {
         FD_STDOUT => {
-            let slice = unsafe {
-                core::slice::from_raw_parts(buf, len)
-            };
-            let str = core::str::from_utf8(slice).unwrap();
-            print!("{}", str);
+            let buffers = translated_byte_buffer(current_user_token(), buf, len);
+            for buffer in buffers {
+                let str = core::str::from_utf8(buffer).unwrap();
+                print!("{}", str);
+            }
             len as isize
         }
         _ => {
-            panic!("Unsupported fd in sys_write!");
+            todo!("Lab 6: implement sys_write for all file descriptors")
         }
     }
 }
 ```
 
-当用户程序调用 `sys_write(1, buf, len)` 时，内核将 `buf` 指针处长度为 `len` 的字节序列解释为 UTF-8 字符串，通过 `print!` 宏输出到控制台。`print!` 宏最终调用了 SBI 的 `console_putchar` 接口，将每个字符逐一发送到 QEMU 虚拟机的 UART 设备：
+当用户程序调用 `sys_write(1, buf, len)` 时，内核将 `buf` 指针处长度为 `len` 的字节序列解释为 UTF-8 字符串，通过 `print!` 宏输出到控制台。`print!` 宏最终调用了 SBI 的 `console_putchar` 接口，将每个字符逐一发送到 QEMU 虚拟机的 UART 设备.
+
+## 实验内容
+
+实现 `alloc_fd()` 函数，实现对于 `fd` 文件描述符的最小分配，从 `fd_table` 中找到一个空闲槽位 (None)，如果找到就返回编号；如果找不到则再表尾添加一个空闲槽位并返回新槽位的索引.
 
 ```rust
-// kernel/src/utils/sbi.rs
-pub fn console_putchar(c: usize) {
-    sbi_call(SBI_CONSOLE_PUTCHAR, c, 0, 0);
+// kernel/src/task/task.rs
+pub fn alloc_fd(&mut self) -> usize {
+    todo!("Lab 6: implement alloc_fd")
 }
 ```
 
-`sbi_call` 通过 `ecall` 指令陷入 M 模式的 SBI 固件（如 RustSBI），由 SBI 完成实际的硬件操作。这个调用链展示了一个完整的 I/O 路径：用户态 `write()` → `ecall` → 内核 `trap_handler` → `sys_write` → SBI `console_putchar` → UART 硬件。
+然后实现 `sys_write`, `sys_read`, `sys_open` 和 `sys_close`，你可以参考我们先前提到的代码样例：
 
-对于其他文件描述符，当前实现直接 panic。这正是 Ch6 实验需要扩展的地方——支持真正的文件操作。
+```rust
+pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        let file = file.clone();
+        // release Task lock manually to avoid deadlock
+        drop(inner);
+        ... 
+    } else {
+        -1
+    }
+}
+```
+
+出于简化考虑，所有错误返回值均为 -1，正确返回时返回 `fd` 或者 0.
+
+对于 `sys_write` 和 `sys_read`，获取当前任务的 `inner` 之后，各自检查是否可写、可读. 然后将用户态缓冲区翻译成 `UserBuffer` 后调用文件的 `write` 和 `read` 方法.
+
+`sys_open` 不需要提前获取 `inner`，先用 `translated_str` 把路径从用户态翻译成 `&str`，再调用 `open_file`. 如果返回 `Some(inode)`，再获取可变 `inner`，用 `alloc_fd` 分配描述符并存入 `fd_table`，返回 `fd`；失败返回 -1.
+
+`sys_close` 获取可变 `inner` 后，依次判断 `fd` 是否越界或对应项是否为 `None`(两种情况都返回 -1). 合法时把文件描述符移除即可，最后返回 0.
+
+可以使用 `make test CHAPTER=6` 进行本地测试. 完成后上传评测.
