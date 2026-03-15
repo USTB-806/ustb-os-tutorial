@@ -48,6 +48,6 @@ description: 在开始实验前应当知道的内容
 Makefile 在小学期时大家已经接触过，这并不是本次实验的重点. 但在某些情况下，同学们可能需要自己编写 Makefile 来更好优化自己的工作流.
 
 可以参考如下资料：
-- [Makefile 简介](../reference/makefile)
+- [Makefile 简介](../../reference/01-makefile/)
 - [跟我一起写 Makefile](https://seisman.github.io/how-to-write-makefile/introduction.html)
 - [GNU make](https://www.gnu.org/software/make/manual/make.html)
