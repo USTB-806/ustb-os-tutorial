@@ -1,0 +1,42 @@
+---
+title: 练习
+description: lab6 练习
+---
+
+## 当前的 I/O 实现
+
+内核目前支持的 I/O 操作仅限于标准输出的写入，通过 `sys_write` 系统调用实现。该系统调用定义在 `kernel/src/syscall/fs.rs` 中：
+
+```rust
+// kernel/src/syscall/fs.rs
+const FD_STDOUT: usize = 1;
+
+pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
+    match fd {
+        FD_STDOUT => {
+            let slice = unsafe {
+                core::slice::from_raw_parts(buf, len)
+            };
+            let str = core::str::from_utf8(slice).unwrap();
+            print!("{}", str);
+            len as isize
+        }
+        _ => {
+            panic!("Unsupported fd in sys_write!");
+        }
+    }
+}
+```
+
+当用户程序调用 `sys_write(1, buf, len)` 时，内核将 `buf` 指针处长度为 `len` 的字节序列解释为 UTF-8 字符串，通过 `print!` 宏输出到控制台。`print!` 宏最终调用了 SBI 的 `console_putchar` 接口，将每个字符逐一发送到 QEMU 虚拟机的 UART 设备：
+
+```rust
+// kernel/src/utils/sbi.rs
+pub fn console_putchar(c: usize) {
+    sbi_call(SBI_CONSOLE_PUTCHAR, c, 0, 0);
+}
+```
+
+`sbi_call` 通过 `ecall` 指令陷入 M 模式的 SBI 固件（如 RustSBI），由 SBI 完成实际的硬件操作。这个调用链展示了一个完整的 I/O 路径：用户态 `write()` → `ecall` → 内核 `trap_handler` → `sys_write` → SBI `console_putchar` → UART 硬件。
+
+对于其他文件描述符，当前实现直接 panic。这正是 Ch6 实验需要扩展的地方——支持真正的文件操作。
