@@ -1,0 +1,140 @@
+---
+title: 进程抽象与控制块（PCB）
+description: 结合源码理解 TaskControlBlock、PID 与内核栈、状态机以及 new/fork/exec 关键路径。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 本节导入
+
+1. 进程如何拥有独立身份；
+2. 进程如何创建、复制、替换；
+3. 进程退出后如何回收。
+
+在 `kernel/src/task/task.rs` 中：
+
+```rust
+pub struct TaskControlBlock {
+    pub pid: PidHandle,
+    pub kernel_stack: KernelStack,
+    inner: UPSafeCell<TaskControlBlockInner>,
+}
+```
+
+`TaskControlBlockInner` 可按职责分三类：
+
+1. 执行状态：`task_cx`、`trap_cx_ppn`、`task_status`；
+2. 资源状态：`memory_set`、`fd_table`、`heap_bottom/program_brk`；
+3. 关系状态：`parent`、`children`、`exit_code`、`priority/stride`。
+
+<Aside type="tip">
+学习 PCB 的关键不是背字段，而是看字段在哪条路径被修改。字段变化本身就是进程语义。
+</Aside>
+
+---
+
+## 2. PID 与内核栈布局
+
+`kernel/src/task/id.rs` 中：
+
+```rust
+pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
+    let top = TRAMPOLINE - app_id * (KERNEL_STACK_SIZE + PAGE_SIZE);
+    let bottom = top - KERNEL_STACK_SIZE;
+    (bottom, top)
+}
+```
+
+1. 内核栈在 `TRAMPOLINE` 下方按固定间距排布；
+2. 相邻栈之间预留一页 `PAGE_SIZE` 作为 guard page。
+
+guard page 不映射物理页，越界会触发异常，便于早发现错误。
+
+---
+
+## 3. 进程状态机与 Zombie
+
+```rust
+pub enum TaskStatus {
+    UnInit,
+    Ready,
+    Running,
+    Zombie,
+}
+```
+
+```text
+UnInit -> Ready <-> Running -> Zombie
+```
+
+`Zombie` 的作用是保留退出码与父子关系，等待 `waitpid` 回收。
+
+---
+
+## 4. TaskContext 与首次运行入口
+
+`kernel/src/task/context.rs`：
+
+```rust
+pub struct TaskContext {
+    ra: usize,
+    sp: usize,
+    s: [usize; 12],
+}
+```
+
+```rust
+pub fn goto_trap_return(kstack_ptr: usize) -> Self {
+    Self {
+        ra: trap_return as usize,
+        sp: kstack_ptr,
+        s: [0; 12],
+    }
+}
+```
+
+关键是 `ra = trap_return`，使进程首次被调度后能恢复到用户态入口。
+
+---
+
+## 5. 三条核心路径：new / fork / exec
+
+### `TaskControlBlock::new`
+
+1. `MemorySet::from_elf` 解析 ELF；
+2. 分配 PID 与内核栈；
+3. 初始化 `task_cx`；
+4. 构造 `TrapContext::app_init_context(...)`。
+
+### `TaskControlBlock::fork`
+
+1. 复制父进程地址空间；
+2. 克隆 fd 表；
+3. 建立 `parent/children` 关系；
+4. 子进程 `trap_cx.kernel_sp` 指向自己的内核栈；
+5. syscall 层设置子进程返回寄存器 `a0/x10 = 0`。
+
+### `TaskControlBlock::exec`
+
+1. 保留：PID、父子关系；
+2. 替换：地址空间、入口点、用户栈、堆边界。
+
+---
+
+## 6. 启动到首个进程
+
+```rust
+task::add_initproc();
+task::run_tasks();
+```
+
+`initproc` 是进程树根节点，也是孤儿进程回收语义的保障。
+
+---
+
+## 本节重点
+
+1. PCB 是进程管理核心抽象；
+2. PID 与内核栈固定布局保证安全性；
+3. `Zombie` 是 `waitpid` 正确回收的前提；
+4. `new/fork/exec` 对应创建、复制、替换三类路径。

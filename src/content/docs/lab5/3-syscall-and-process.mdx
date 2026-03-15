@@ -1,0 +1,141 @@
+---
+title: 系统调用与进程关系
+description: 连接用户态 API 与内核进程管理，实现 fork/exec/spawn/waitpid 的语义闭环。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 本节导入
+
+用户程序并不直接操作 PCB，它通过 ecall 发起系统调用，再由内核完成分发：
+
+```text
+ecall -> trap_handler -> syscall(...) -> sys_* -> task/* -> schedule
+```
+
+---
+
+## 1. 进程相关 syscall 分发入口
+
+`kernel/src/syscall/mod.rs`：
+
+```rust
+SYSCALL_FORK         => sys_fork(),
+SYSCALL_EXEC         => sys_exec(args[0] as *const u8),
+SYSCALL_WAITPID      => sys_waitpid(args[0] as isize, args[1] as *mut i32),
+SYSCALL_SPAWN        => sys_spawn(args[0] as *const u8),
+SYSCALL_SET_PRIORITY => sys_set_priority(args[0] as isize),
+```
+
+---
+
+## 2. `sys_fork`
+
+```rust
+let current_task = current_task().unwrap();
+let new_task = current_task.fork();
+let new_pid = new_task.pid.0;
+let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
+trap_cx.x[10] = 0;
+add_task(new_task);
+new_pid as isize
+```
+
+语义：父进程返回子 pid，子进程返回 `0`。
+
+---
+
+## 3. `sys_exec`
+
+```rust
+if let Some(data) = get_app_data_by_name(path.as_str()) {
+    let task = current_task().unwrap();
+    task.exec(data);
+    0
+} else {
+    -1
+}
+```
+
+`exec` 成功后 PID 不变，但地址空间、入口点、用户栈被新程序替换。
+
+<Aside type="tip">
+`fork + exec` 的经典组合是：先复制执行现场，再由子进程替换镜像。
+</Aside>
+
+---
+
+## 4. `sys_spawn`
+
+```rust
+let task = current_task().unwrap().spwan(data);
+let new_pid = task.getpid();
+add_task(task);
+new_pid as isize
+```
+
+注意源码函数名是 spwan（保留原拼写）。它可理解为“直接创建并装载目标程序”。
+
+---
+
+## 5. `sys_exit` 与 Zombie
+
+`sys_exit` 会进入 `exit_current_and_run_next(exit_code)`，效果是：
+
+1. 状态改为 `Zombie`；
+2. 写入退出码；
+3. 从运行路径移除并触发重新调度。
+
+---
+
+## 6. `sys_waitpid` 契约
+
+当前代码保留 TODO，契约明确为：
+
+1. `pid == -1`：等待任意子进程；
+2. `pid > 0`：等待指定子进程；
+3. 无匹配子进程：`-1`；
+4. 有匹配但未退出：`-2`；
+5. 回收成功：写回退出码并返回子 pid。
+
+可直接参考注释中的 API 组合：
+
+- `inner.children.iter().any(...)` 判定匹配关系；
+- `inner.children.iter().enumerate().find(...)` 查找 Zombie；
+- `translated_refmut(inner.memory_set.token(), exit_code_ptr)` 写回用户态。
+
+---
+
+## 7. `sys_set_priority`
+
+```rust
+if prio >= 2 {
+    inner.priority = prio as usize;
+    prio
+} else {
+    -1
+}
+```
+
+当 stride 调度生效后，priority 将影响长期 CPU 配额。
+
+---
+
+## 8. 完整调用链示例
+
+以 fork -> 子进程 exec -> 父进程 waitpid 为例：
+
+1. 父进程 `fork` 获得子 pid；
+2. 子进程返回 `0` 并执行 `exec`；
+3. 子进程 `exit` 后进入 `Zombie`；
+4. 父进程 `waitpid` 回收并读取退出码。
+
+---
+
+## 本节重点
+
+1. syscall 分发把用户态请求映射为内核进程操作；
+2. fork 的关键是双返回值语义；
+3. exec 的关键是“身份不变、镜像替换”；
+4. waitpid 的关键是匹配关系、Zombie 判定与退出码写回；
+5. set_priority 是 stride 策略输入。

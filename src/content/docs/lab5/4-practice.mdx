@@ -1,0 +1,140 @@
+---
+title: 实验任务：实现 waitpid 与步幅调度
+description: 完成进程回收机制与 stride 调度策略，并建立可复现、可解释的验证流程。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 实验前置
+
+1. 已阅读 lab5 前三节；
+2. 熟悉以下文件：
+   - `kernel/src/syscall/process.rs`
+   - `kernel/src/task/manager.rs`
+   - `kernel/src/task/processor.rs`
+   - `kernel/src/task/stride.rs`
+3. 能使用 `make run` 观察测试输出。
+
+---
+
+## 任务 1：实现 `sys_waitpid`
+
+目标位置：`kernel/src/syscall/process.rs`
+
+```rust
+pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
+    todo!("Lab 6: implement sys_waitpid")
+}
+```
+
+```text
+A. 判定是否有匹配子进程
+   无 -> return -1
+B. 判定匹配子进程是否有 Zombie
+   无 -> return -2
+C. 回收 Zombie 并写回退出码
+   remove(child) -> *translated_refmut(...) = exit_code -> return child_pid
+```
+
+1. `pid == -1`：等待任意子进程；
+2. `pid > 0`：等待指定子进程；
+3. 无匹配子进程返回 `-1`；
+4. 有匹配但未 Zombie 返回 `-2`；
+5. 回收成功返回子 pid，并写回退出码。
+
+- `current_task()`
+- `inner.children.iter().any(...)`
+- `inner.children.iter().enumerate().find(...)`
+- `translated_refmut(inner.memory_set.token(), exit_code_ptr)`
+
+<Aside type="caution">
+常见错误是先找 Zombie，再判断匹配关系，导致 `-1` 和 `-2` 语义混淆。
+</Aside>
+
+---
+
+## 任务 2：实现 `stride_fetch`
+
+目标位置：`kernel/src/task/manager.rs`
+
+```rust
+pub fn stride_fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
+    None
+}
+```
+
+建议按“选择 + 更新”两步实现：
+
+1. 在 `ready_queue` 中挑选 stride 最小任务；
+2. 将其移出队列后执行 `stride.step(priority)` 再返回。
+
+建议加稳定 tie-break（如 pid），保证结果可复现。
+
+1. 不要跨作用域持有可变借用；
+2. 选中任务后不要忘记调用 `step`。
+
+---
+
+## 任务 3：切换调度入口到 stride
+
+1. 将 `fetch_task()` 路径切到 `stride_fetch()`；
+2. 保持 `run_tasks()` 主循环和 `schedule/__switch` 链路不变。
+
+- `kernel/src/task/manager.rs`
+- `kernel/src/task/processor.rs`
+
+---
+
+## 推荐实现顺序
+
+1. 先做 `waitpid`：先闭合生命周期；
+2. 再做 `stride_fetch`：再完成策略；
+3. 最后切换入口并回归：保证系统稳定。
+
+---
+
+## 验证建议
+
+1. 进程语义：
+   - `ch5_getpid`
+   - `ch5_forktest*`
+   - `ch5_forktree`
+
+2. 调度行为：
+   - `ch5_stride0` 到 `ch5_stride5`
+
+3. 回归检查：
+   - `yield`、`exit`、`exec`、`spawn` 保持正常。
+
+---
+
+## 最小通过标准
+
+1. `waitpid` 的 `-1/-2/成功` 语义准确；
+2. 子进程退出码可被父进程正确读回；
+3. stride 用例能体现优先级差异；
+4. 切换到 stride 后不破坏已有功能。
+
+---
+
+## 常见错误
+
+1. 只匹配 pid，不判断 Zombie；
+2. 回收后未写回 `exit_code`；
+3. 选中任务后忘记 `step`；
+4. 实现 stride 但分发仍走 FIFO；
+5. 借用跨调度点导致 panic。
+
+---
+
+## 本章重点内容
+
+1. 进程生命周期闭环：`fork/exec/exit/waitpid`；
+2. 进程关系维护：`parent/children` 与孤儿过继；
+3. 策略与框架解耦：只替换 fetch 策略，不改调度框架；
+4. 返回值契约驱动实现：`-1/-2/pid` 对应不同系统状态；
+5. 从“能跑”到“可验证”：每条语义都要可观测、可复现。
+
+<Aside type="tip">
+完成本实验后，你的内核将具备更完整的进程管理闭环：创建、替换、调度、退出、回收。
+</Aside>

@@ -1,0 +1,112 @@
+---
+title: 调度器与处理器抽象
+description: 结合 manager.rs、processor.rs 与 task/mod.rs，梳理“谁先运行”这条调度主线。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## 本节导入
+
+PCB 回答“进程是什么”，调度器回答“下一拍让谁运行”。
+
+- `kernel/src/task/manager.rs`
+- `kernel/src/task/processor.rs`
+- `kernel/src/task/mod.rs`
+
+---
+
+## 1. TaskManager：就绪队列
+
+```rust
+pub struct TaskManager {
+    ready_queue: VecDeque<Arc<TaskControlBlock>>,
+}
+```
+
+1. `add(task)`：入队；
+2. `fetch()`：出队。
+
+默认行为是 FIFO。代码还预留了步幅调度入口：
+
+```rust
+pub fn stride_fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
+    None
+}
+```
+
+---
+
+## 2. Processor：CPU 侧运行状态
+
+```rust
+pub struct Processor {
+    current: Option<Arc<TaskControlBlock>>,
+    idle_task_cx: TaskContext,
+}
+```
+
+1. `current` 记录当前运行进程；
+2. `idle_task_cx` 是调度器上下文锚点。
+
+---
+
+## 3. `run_tasks` 主循环
+
+1. 取任务；
+2. 状态改为 `Running`；
+3. 写入 `processor.current`；
+4. `__switch(idle, next)` 切到任务。
+
+任务让出 CPU 或退出后，再切回 `idle_task_cx`，循环继续。
+
+<Aside type="note">
+进入 `__switch` 前需要释放相关借用，否则回切后容易触发借用冲突。
+</Aside>
+
+---
+
+## 4. 两条交还 CPU 的路径
+
+### A. `suspend_current_and_run_next`
+
+触发源：`sys_yield` 或时钟中断。
+
+1. `Running -> Ready`；
+2. 回到就绪队列；
+3. 切回调度器。
+
+### B. `exit_current_and_run_next`
+
+触发源：`sys_exit`。
+
+1. 状态改为 `Zombie`；
+2. 记录退出码；
+3. 子进程过继 `INITPROC`；
+4. 回收用户地址空间与 fd；
+5. 不再入队，直接切回调度器。
+
+---
+
+## 5. 为什么要过继给 INITPROC
+
+父进程可能先退出，但子进程后续仍需 `waitpid` 回收。
+
+将孤儿过继给 `INITPROC`，保证系统中始终存在可执行回收的父进程。
+
+---
+
+## 6. 本章策略替换点
+
+当前 `fetch_task()` 默认走 FIFO，步幅策略入口在 `stride_fetch()`。
+
+1. 只替换取任务策略；
+2. 不改 `run_tasks/schedule/__switch` 框架。
+
+---
+
+## 本节重点
+
+1. TaskManager 管可运行集合，Processor 管 CPU 当前上下文；
+2. `run_tasks` 负责串联调度器与任务上下文；
+3. 挂起路径会回队，退出路径不会回队；
+4. 孤儿过继是进程回收正确性的关键保障。
