@@ -104,21 +104,17 @@ fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
 vpn.indexes() = [i0, i1, i2]   // [VPN[2], VPN[1], VPN[0]]
 
 1. 查找 i0
-  ppn = self.root_ppn
-  pte = ppn.get_pte_array()[i0]
   若 pte.is_valid() == false：
     分配新帧 frame，令 pte = PageTableEntry::new(frame.ppn, V)
     将 frame 存入 self.frames（转移所有权）
-  ppn = pte.ppn()   // 进入二级页表
+    进入二级页表
 
-1. 查找 i1
-  pte = ppn.get_pte_array()[i1]
-  （同上，若不存在则分配新帧）
-  ppn = pte.ppn()   // 进入三级页表
+2. 查找 i1
+    同上，若不存在则分配新帧
+    进入三级页表
 
-1. 查找 i2
-  pte = &mut ppn.get_pte_array()[i2]
-  直接返回该 PTE 的可变引用（叶子节点，不判断 valid）
+3. 查找 i2
+  直接返回该 PTE 的可变引用
 ```
 
 <Aside type="note">
@@ -143,22 +139,7 @@ fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
 | 中间节点缺失 | 分配新帧并创建节点 | 返回 `None` |
 | 用途 | 建立新映射（`map`） | 查询/删除现有映射（`translate`, `unmap`） |
 
-**遍历过程：**
-
-```
-vpn.indexes() = [i0, i1, i2]
-
-ppn = self.root_ppn
-         pte = ppn.get_pte_array()[i0]
-         若 !pte.is_valid() → return None
-
-ppn = pte.ppn()
-         pte = ppn.get_pte_array()[i1]
-         若 !pte.is_valid() → return None
-
-ppn = pte.ppn()
-         return Some(&mut ppn.get_pte_array()[i2])
-```
+> 参考`find_pte_create`函数，仔细思考其中区别
 
 ### 3. `map` —— 建立 VPN → PPN 映射
 
@@ -172,14 +153,11 @@ pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags)
 **实现逻辑：**
 
 ```
-1. pte = self.find_pte_create(vpn).unwrap()
-   // 找到（或创建）叶子节点
+1. 找到（或创建）叶子节点
 
-2. assert!(!pte.is_valid())
-   // 断言：该 VPN 尚未被映射（防御性检查，避免重复映射）
+2. 检查该 VPN 尚未被映射（防御性检查，避免重复映射）
 
-3. *pte = PageTableEntry::new(ppn, flags | PTEFlags::V)
-   // 写入 PPN 和权限标志，并置位 V（使映射有效）
+3. 写入 PPN 和权限标志，并置位 V（使映射有效）
 ```
 
 <Aside type="caution">
@@ -199,14 +177,11 @@ pub fn unmap(&mut self, vpn: VirtPageNum)
 **实现逻辑：**
 
 ```
-1. pte = self.find_pte(vpn).unwrap()
-   // 找到叶子节点（若不存在则 panic）
+1. 找到叶子节点（若不存在则 panic）
 
-2. assert!(pte.is_valid())
-   // 断言：该映射确实存在
+2. 检查该映射确实存在
 
-3. *pte = PageTableEntry::empty()
-   // 将 PTE 清零（等价于 bits = 0），V 位变为 0，映射失效
+3.  将 PTE 清零（等价于 bits = 0），V 位变为 0，映射失效
 ```
 
 <Aside type="tip">

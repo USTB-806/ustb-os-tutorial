@@ -151,7 +151,7 @@ user_stack_bottom      ├──────────────────
 
 ```
 0xFFFF_FFFF_FFFF_F000  ┌──────────────────┐ Trampoline（与物理地址对齐）
-                       │    MMIO 寄存器    │ 恒等映射
+(trampoline的虚拟地址)  │    MMIO 寄存器    │ 恒等映射
                        │    物理内存       │ 恒等映射
                        │    .bss/.data     │ 恒等映射
                        │    .rodata        │ 恒等映射
