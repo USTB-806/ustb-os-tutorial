@@ -130,12 +130,4 @@ if prio >= 2 {
 3. 子进程 `exit` 后进入 `Zombie`；
 4. 父进程 `waitpid` 回收并读取退出码。
 
----
 
-## 本节重点
-
-1. syscall 分发把用户态请求映射为内核进程操作；
-2. fork 的关键是双返回值语义；
-3. exec 的关键是“身份不变、镜像替换”；
-4. waitpid 的关键是匹配关系、Zombie 判定与退出码写回；
-5. set_priority 是 stride 策略输入。

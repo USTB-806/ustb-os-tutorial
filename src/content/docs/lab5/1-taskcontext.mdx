@@ -33,26 +33,7 @@ pub struct TaskControlBlock {
 
 ---
 
-## 2. PID 与内核栈布局
-
-`kernel/src/task/id.rs` 中：
-
-```rust
-pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
-    let top = TRAMPOLINE - app_id * (KERNEL_STACK_SIZE + PAGE_SIZE);
-    let bottom = top - KERNEL_STACK_SIZE;
-    (bottom, top)
-}
-```
-
-1. 内核栈在 `TRAMPOLINE` 下方按固定间距排布；
-2. 相邻栈之间预留一页 `PAGE_SIZE` 作为 guard page。
-
-guard page 不映射物理页，越界会触发异常，便于早发现错误。
-
----
-
-## 3. 进程状态机与 Zombie
+## 进程状态机与 Zombie
 
 ```rust
 pub enum TaskStatus {
@@ -66,38 +47,13 @@ pub enum TaskStatus {
 ```text
 UnInit -> Ready <-> Running -> Zombie
 ```
-
-`Zombie` 的作用是保留退出码与父子关系，等待 `waitpid` 回收。
-
----
-
-## 4. TaskContext 与首次运行入口
-
-`kernel/src/task/context.rs`：
-
-```rust
-pub struct TaskContext {
-    ra: usize,
-    sp: usize,
-    s: [usize; 12],
-}
-```
-
-```rust
-pub fn goto_trap_return(kstack_ptr: usize) -> Self {
-    Self {
-        ra: trap_return as usize,
-        sp: kstack_ptr,
-        s: [0; 12],
-    }
-}
-```
-
-关键是 `ra = trap_return`，使进程首次被调度后能恢复到用户态入口。
+注意和第三章的`TaskStatus`进行区分，由于我们对进程的管理不断完善，我们不再直接让进程退出，
+而是让其先变成“僵尸进程”，然后由父进程进行回收。这样的目的是为了拿到子进程的退出码，可以用来判断子进程是否是正常退出，
+从而给出相应的反应和给用户的提示。
 
 ---
 
-## 5. 三条核心路径：new / fork / exec
+## 三条核心路径：new / fork / exec
 
 ### `TaskControlBlock::new`
 
@@ -119,22 +75,5 @@ pub fn goto_trap_return(kstack_ptr: usize) -> Self {
 1. 保留：PID、父子关系；
 2. 替换：地址空间、入口点、用户栈、堆边界。
 
----
 
-## 6. 启动到首个进程
 
-```rust
-task::add_initproc();
-task::run_tasks();
-```
-
-`initproc` 是进程树根节点，也是孤儿进程回收语义的保障。
-
----
-
-## 本节重点
-
-1. PCB 是进程管理核心抽象；
-2. PID 与内核栈固定布局保证安全性；
-3. `Zombie` 是 `waitpid` 正确回收的前提；
-4. `new/fork/exec` 对应创建、复制、替换三类路径。
