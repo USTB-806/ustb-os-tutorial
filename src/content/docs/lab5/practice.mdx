@@ -55,3 +55,7 @@ pub fn stride_fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
 为了实现对于 stride 的比较，你可能需要实现 `PartialOrd` 方法. 当然，直接比较也是可行的，这会更容易实现.
 
 `stride_fetch` 需要找出 `stride` 最小的任务索引，取出任务并 `step` 更新 `stride` 值.
+
+:::caution
+完成本章练习后，你需要通过助教的验收，否则将不会获得实验分数.
+:::

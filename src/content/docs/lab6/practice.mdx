@@ -71,3 +71,7 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
 `sys_close` 获取可变 `inner` 后，依次判断 `fd` 是否越界或对应项是否为 `None`(两种情况都返回 -1). 合法时把文件描述符移除即可，最后返回 0.
 
 可以使用 `make test CHAPTER=6` 进行本地测试. 完成后上传评测.
+
+:::caution
+完成本章练习后，你需要通过助教的验收，否则将不会获得实验分数.
+:::
