@@ -66,7 +66,7 @@ pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
 
 对于 `sys_write` 和 `sys_read`，获取当前任务的 `inner` 之后，各自检查是否可写、可读. 然后将用户态缓冲区翻译成 `UserBuffer` 后调用文件的 `write` 和 `read` 方法.
 
-`sys_open` 不需要提前获取 `inner`，先用 `translated_str` 把路径从用户态翻译成 `&str`，再调用 `open_file`. 如果返回 `Some(inode)`，再获取可变 `inner`，用 `alloc_fd` 分配描述符并存入 `fd_table`，返回 `fd`；失败返回 -1.
+`sys_open` 把路径从用户态翻译成 `&str`后，打开文件. 如果返回 `Some(inode)`，再分配描述符并存入 `fd_table`，返回 `fd`；失败返回 -1.
 
 `sys_close` 获取可变 `inner` 后，依次判断 `fd` 是否越界或对应项是否为 `None`(两种情况都返回 -1). 合法时把文件描述符移除即可，最后返回 0.
 
