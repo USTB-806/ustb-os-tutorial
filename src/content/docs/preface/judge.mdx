@@ -14,9 +14,9 @@ template: doc
 
 ## Lab1 评测
 
-评测内容为执行 `rustlings verify`，根据通过 case 的数量进行计分. 
+评测内容为执行 `rustlings verify`，根据通过 case 的数量进行计分. 在本地环境执行 `rustlings verify` 即为执行**本地评测**.
 
-若使用云端评测，需将项目打包为 `.tar.gz` 的格式.
+若使用**云端评测**，需将项目打包为 `.tar.gz` 的格式.
 
 ```shell
 cd /path/to/ustb-os-rustlings
@@ -31,7 +31,7 @@ tar -czf ../ustb-os-rustlings.tar.gz .
 
 进入项目后，拉取测评机至与 `kernel` 和 `user` 同等目录的层级，然后执行 `make test`.
 
-具体而言执行如下语句，以执行 lab3 的测试为例：
+**本地测评**具体而言执行如下语句，以执行 lab3 的测试为例：
 
 ```shell
 cd /ustb-os-kernel
@@ -42,7 +42,7 @@ make test CHAPTER=3
 
 其中运行结果将保存至 `stdout-ch3` 文件中.
 
-云端评测需要打包 `ustb-os-kernel`，执行：
+**云端评测**需要打包 `ustb-os-kernel`，执行：
 
 ```shell
 cd ustb-os-kernel
