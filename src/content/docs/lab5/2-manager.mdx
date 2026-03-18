@@ -1,105 +1,121 @@
 ---
-title: 调度器与处理器抽象
-description: 结合 manager.rs、processor.rs 与 task/mod.rs，梳理“谁先运行”这条调度主线。
+title: 调度器与处理器管理
+description: 深入解析内核的任务调度机制，包括 TaskManager、Processor 以及核心调度循环。
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-## 本节导入
+在操作系统内核中，调度器（Scheduler）负责决定"下一个运行谁"，而处理器管理单元（Processor）负责维护"当前谁在运行"。本节将结合 `kernel/src/task/manager.rs` 和 `kernel/src/task/processor.rs`，深入剖析这两个核心组件。
 
-PCB 回答“进程是什么”，调度器回答“下一拍让谁运行”。
+## TaskManager & Processor
 
-- `kernel/src/task/manager.rs`
-- `kernel/src/task/processor.rs`
-- `kernel/src/task/mod.rs`
-
----
-
-## 1. TaskManager：就绪队列
+`TaskManager` 负责管理所有处于 **Ready（就绪）** 状态的任务。在简单的实现中，我们可以使用一个双端队列来维护，即一个关于 `Arc<TaskControlBlock>` 类型的 `VecDeque` 队列，`TASK_MANAGER` 是其全局实例。
 
 ```rust
+/// A array of `TaskControlBlock` that is thread-safe
 pub struct TaskManager {
     ready_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 ```
 
-1. `add(task)`：入队；
-2. `fetch()`：出队。
+其核心功能包括：
+1.  `add(task)`: 将一个任务加入就绪队列的队尾。
+2.  `fetch()`: 从就绪队列队头取出一个任务进行调度。
 
-默认行为是 FIFO。代码还预留了步幅调度入口：
+目前默认实现的调度策略是 **FIFO (First-In-First-Out)**，即先入先出。代码中也预留了 `stride_fetch()` 接口，用于后续扩展 Stride Scheduling 等更高级的算法。
 
-```rust
-pub fn stride_fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-    None
-}
-```
+对于 `Processor` 则由 `current:Option<Arc<TaskControlBlock>>` 和 `idle_task_cx:TaskContext` 组成，分别表示当前处理器上正在执行的任务和当前处理器上 idle 控制流的任务上下文。`PROCESSOR` 是其全局实例。
 
----
-
-## 2. Processor：CPU 侧运行状态
+简单来说，`Processor` 结构体用于描述 CPU 当前的运行状态，特别是它正在执行哪个任务。
 
 ```rust
+/// Processor management structure
 pub struct Processor {
+    /// The task currently executing on the current processor
     current: Option<Arc<TaskControlBlock>>,
+    /// The basic control flow of each core, helping to select and switch process
     idle_task_cx: TaskContext,
 }
+
+lazy_static! {
+    pub static ref PROCESSOR: UPSafeCell<Processor> = unsafe { UPSafeCell::new(Processor::new()) };
+}
 ```
 
-1. `current` 记录当前运行进程；
-2. `idle_task_cx` 是调度器上下文锚点。
+成员 `current` 指向当前占用 CPU 的任务 TCB。如果 CPU 处于空闲或调度状态，该值为 `None`。而 `idle_task_cx` 是调度器线程 (Processor Loop) 的上下文。当任务被切换出去时，CPU 会跳转回这里，继续执行调度循环。
 
----
+## 调度主循环 `run_tasks`
 
-## 3. `run_tasks` 主循环
+`run_tasks` 在任务管理器 `TASK_MANAGER` 取出 (`fetch_task`) 相应任务后，进行上下文切换。由于用 `loop` 包裹，将会循环取出任务并进行任务切换，不过 `__switch` 后会切出这个函数。对于 `__switch` 函数，内核先把 `current_task_cx_ptr` 中的寄存器值保存在当前指针的经过偏移的地址下，再将 `next_task_cx_ptr` 的寄存器恢复，由此实现各寄存器值的切换。
 
-1. 取任务；
-2. 状态改为 `Running`；
-3. 写入 `processor.current`；
-4. `__switch(idle, next)` 切到任务。
+```rust
+/// The main part of process execution and scheduling
+/// Loop `fetch_task` to get the process that needs to run, and switch the process through `__switch`
+pub fn run_tasks() {
+    loop {
+        let mut processor = PROCESSOR.exclusive_access();
+        if let Some(task) = fetch_task() {
+            ...
+            unsafe {
+                __switch(idle_task_cx_ptr, next_task_cx_ptr);
+            }
+        } else {
+            warn!("no tasks available in run_tasks");
+        }
+    }
+}
+```
 
-任务让出 CPU 或退出后，再切回 `idle_task_cx`，循环继续。
+而 `schedule` 由 `suspend_current_and_run_next` 调用，当应用交出 CPU 使用权后，实施将当前进程挂起为 `TaskStatus::Ready` 后的上下文切换操作，将当前上下文保存并切换为`idle_task_cx`的上下文。切换回去之后，内核将跳转到 `run_tasks` 中 `__switch` 返回之后的位置，也即开启了下一轮的调度循环。
 
-<Aside type="note">
-进入 `__switch` 前需要释放相关借用，否则回切后容易触发借用冲突。
-</Aside>
+```rust
+/// Suspend the current 'Running' task and run the next task in task list.
+pub fn suspend_current_and_run_next() {
+    ...
+    task_inner.task_status = TaskStatus::Ready;
+    ...
+    add_task(task);
+    schedule(task_cx_ptr);
+}
 
----
+/// Return to idle control flow for new scheduling
+pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
+    let mut processor = PROCESSOR.exclusive_access();
+    let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
+    drop(processor);
+    unsafe {
+        __switch(switched_task_cx_ptr, idle_task_cx_ptr);
+    }
+}
+```
 
-## 4. 两条交还 CPU 的路径
+:::note[这不是调度算法]
+这一部分是调度的具体实现，并非调度算法。
+:::
 
-### A. `suspend_current_and_run_next`
+`add_initproc` 在 `main` 中被调用，作用是将全局的 `INITPROC` 加入 `TASK_MANAGER` 中.
 
-触发源：`sys_yield` 或时钟中断。
+```rust
+/// Add init process to the manager
+pub fn add_initproc() {
+    add_task(INITPROC.clone());
+}
+```
 
-1. `Running -> Ready`；
-2. 回到就绪队列；
-3. 切回调度器。
+总得来说，`run_tasks` 是内核启动后在每个 CPU 上执行的无限循环，首先从 `TaskManager` 中 fetch 一个就绪任务，然后更新状态将该任务的状态从 `Ready` 改为 `Running`。记录当前状态时将任务 TCB 写入 `processor.current`。执行切换时调用 `__switch(idle_task_cx, task.task_cx)`，从调度器线程切换到目标任务。
 
-### B. `exit_current_and_run_next`
+当任务主动让出 CPU (`yield`) 或执行完毕退出 (`exit`) 时，`__switch` 会再次被调用（由 trap handler 发起），将控制流切回 `idle_task_cx`，也就是回到了 `run_tasks` 循环中，准备调度下一个任务。
 
-触发源：`sys_exit`。
+:::note[注意借用检查]
+在进入 `__switch` 之前，必须释放大多数对 TCB 的引用或锁，否则当任务可能会在其他核心（如果有多核）运行或产生复杂的借用依赖，导致死锁或运行时错误。
+:::
 
-1. 状态改为 `Zombie`；
-2. 记录退出码；
-3. 子进程过继 `INITPROC`；
-4. 回收用户地址空间与 fd；
-5. 不再入队，直接切回调度器。
+## 孤儿进程处理
 
----
+为什么需要将子进程过继给 `INITPROC`？
 
-## 5. 为什么要过继给 INITPROC
+在 Linux/Unix 语义中，父进程负责回收子进程的资源（`waitpid`）。如果父进程先于子进程退出，那么子进程就会成为"孤儿进程"。如果没有人回收它们，它们变成僵尸进程后将永久占用 PID 和内核栈，导致资源泄漏。
 
-父进程可能先退出，但子进程后续仍需 `waitpid` 回收。
-
-将孤儿过继给 `INITPROC`，保证系统中始终存在可执行回收的父进程。
-
----
-
-## 6. 本章策略替换点
-
-当前 `fetch_task()` 默认走 FIFO，步幅策略入口在 `stride_fetch()`。
-
-1. 只替换取任务策略；
-2. 不改 `run_tasks/schedule/__switch` 框架。
+因此，我们将所有孤儿进程挂靠到系统初始进程 `INITPROC` 下，由 `INITPROC` 负责定期调用 `waitpid` 清理这些孤儿。
 
 

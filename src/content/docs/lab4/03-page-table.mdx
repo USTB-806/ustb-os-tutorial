@@ -1,33 +1,36 @@
 ---
-title: 页表实现与关键函数分析
-description: PageTableEntry 与 PageTable 结构详解，四个核心函数 find_pte_create / find_pte / map / unmap 的设计分析。
+title: 页表实现与核心函数
+description: PageTableEntry 与 PageTable 结构详解，以及页表映射核心函数的实现分析。
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-## 页表项（PageTableEntry）结构
+本节将详细解析页表项 (`PageTableEntry`) 的结构以及多级页表 (`PageTable`) 的管理逻辑，特别是涉及到映射建立与拆除的核心函数。
 
-RISC-V SV39 规定，每个页表项为 8 字节（64位）：
+## 页表项 PageTableEntry
+
+RISC-V SV39 架构规定，每个页表项 (PTE) 占据 8 字节（64 位）。
 
 ```
  63    54 53          10 9  8  7  6  5  4  3  2  1  0
-
-  保留  │     PPN      │ RSW │ D│ A│ G│ U│ X│ W│ R│ V│
- (10位) │    (44位)    │(2位)│  │  │  │  │  │  │  │  │
+┌──────┬────────────────┬─────┬──┬──┬──┬──┬──┬──┬──┬──┐
+│ 保留 │      PPN       │ RSW │ D│ A│ G│ U│ X│ W│ R│ V│
+│(10位)│     (44位)     │(2位)│  │  │  │  │  │  │  │  │
+└──────┴────────────────┴─────┴──┴──┴──┴──┴──┴──┴──┴──┘
 ```
 
-| 标志位 | 含义 |
-|--------|------|
-| **V** | Valid —— 该 PTE 是否有效 |
-| **R** | Readable —— 映射的页可读 |
-| **W** | Writable —— 映射的页可写 |
-| **X** | Executable —— 映射的页可执行 |
-| **U** | User —— U-mode 可访问（清零则只有 S-mode 可访问） |
-| G | Global —— 全局映射 |
-| A | Accessed —— 硬件置位，表示页最近被访问过 |
-| D | Dirty —— 硬件置位，表示页最近被写过 |
+`PTEFlags` 定义了页表项的权限和状态：
 
-
+| 标志位 | 名称 | 含义 |
+|--------|------|------|
+| **V** | Valid | 该页表项是否有效。如果 V=0，访问该页会触发 Page Fault。 |
+| **R** | Readable | 是否可读。 |
+| **W** | Writable | 是否可写。 |
+| **X** | Executable | 是否可执行（是否包含指令）。 |
+| **U** | User | 用户态 (U-mode) 是否可访问。若 U=0，仅 S-mode 可访问。 |
+| **G** | Global | 全局映射（通常用于内核共享区域，本实验不深入讨论）。 |
+| **A** | Accessed | 访问位。当该页被访问（读/写/执行）时，硬件会自动置位。 |
+| **D** | Dirty | 脏位。当该页被写入时，硬件会自动置位。 |
 
 ```rust
 bitflags! {
@@ -42,61 +45,47 @@ bitflags! {
         const D = 1 << 7;
     }
 }
-
-impl PageTableEntry {
-    pub fn new(ppn: PhysPageNum, flags: PTEFlags) -> Self {
-        PageTableEntry {
-            bits: ppn.0 << 10 | flags.bits as usize,
-            //   ^^^^^^^^^^^^^^^^   PPN 放在 [53:10]
-            //                    ^^^^^^^^^^^^^^^ flags 放在 [7:0]
-        }
-    }
-    
-    pub fn ppn(&self) -> PhysPageNum {
-        (self.bits >> 10 & ((1usize << 44) - 1)).into()
-    }
-    
-    pub fn is_valid(&self) -> bool {
-        (self.flags() & PTEFlags::V) != PTEFlags::empty()
-    }
-}
 ```
 
-<Aside type="note">
-**V 位的特殊规则**：对于中间层（非叶子）页表项，R/W/X 三位必须全为 0，仅 V 位有效，
-PPN 指向下一级页表的物理地址。对于叶子页表项，R/W/X 至少一位为 1。
-CPU 硬件据此区分中间节点和叶子节点。
-</Aside>
 
----
+:::note[**叶子节点与中间节点**]
+**中间节点** PTE 的 `V` 为 1，但 `R`、`W`、`X` **全为 0**，此时 PPN 指向下一级页表的物理页。而
+**叶子节点** PTE 的 `V` 为 1，且 `R`、`W`、`X` 中至少有一个为 1，此时 PPN 指向最终映射的物理页帧。
+:::
 
-## `PageTable` 结构
+## 页表结构 PageTable
+
+`PageTable` 结构体负责管理根页表以及在映射过程中动态分配的中间页表帧：
 
 ```rust
 pub struct PageTable {
-    root_ppn: PhysPageNum,      // 根页表物理页号
-    frames: Vec<FrameTracker>,  // 所有中间节点页表帧的所有权
+    root_ppn: PhysPageNum,      // 根页表的物理页号
+    frames: Vec<FrameTracker>,  // 所有的中间页表帧（用于自动回收）
 }
 ```
 
-`frames` 持有所有动态分配的页表节点的 `FrameTracker`，通过 RAII 保证：
- `PageTable` 销毁时，所有中间页表节点的物理帧自动归还。
+我们使用 `frames` 向量持有所有中间页表节点的 `FrameTracker`。利用 Rust 的 RAII 机制，当 `PageTable` 被销毁时，这些物理帧会被自动释放，防止内存泄漏。
 
 ---
 
-## 四个核心函数（Lab 4 挖空）
+## 核心映射函数
 
-这四个函数均位于 `kernel/src/mm/page_table.rs`。
+在 `kernel/src/mm/page_table.rs` 中，我们需要实现以下关键函数来管理虚拟内存映射。
 
-### 1. `find_pte_create` —— 三级查找（允许创建）
+### 查找并创建页表项 `find_pte_create`
 
-**函数签名：**
 ```rust
 fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
 ```
 
-**作用**：找到 VPN 对应的叶子 PTE 的可变引用。若中间节点不存在，**分配新的物理帧**
-并初始化作为中间节点 PTE（V 位置 1，PPN 指向新帧）。
+**功能**：根据给定的虚拟页号 (`vpn`)，在三级页表中查找对应的叶子页表项。
+- 如果中间级页表不存在，则从物理内存分配器申请一个新的物理帧，初始化为新的页表，并将其添加到 `frames` 中管理。
+- 最终返回指向叶子 PTE 的可变引用，以便后续修改权限或映射物理页。
+
+**逻辑流程**：
+1. 从根页表开始，依次根据 `vpn` 的索引（level 2 -> 1 -> 0）查找 PTE。
+2. 遇到无效的 PTE（V=0），分配新帧，建立链接，继续下一级。
+3. 到达第三级（level 0）时，返回该 PTE 的引用。
 
 **遍历过程（逐级下沉）：**
 
@@ -122,7 +111,7 @@ vpn.indexes() = [i0, i1, i2]   // [VPN[2], VPN[1], VPN[0]]
 它会返回叶子节点 PTE 的引用，不关心它是否 valid（由 `map` 来写入）。
 </Aside>
 
-### 2. `find_pte` —— 三级查找（只读）
+### 三级查找 (只读) `find_pte`
 
 **函数签名：**
 ```rust
@@ -141,7 +130,7 @@ fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry>
 
 > 参考`find_pte_create`函数，仔细思考其中区别
 
-### 3. `map` —— 建立 VPN → PPN 映射
+### 建立映射 `map`
 
 **函数签名：**
 ```rust
@@ -160,12 +149,12 @@ pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags)
 3. 写入 PPN 和权限标志，并置位 V（使映射有效）
 ```
 
-<Aside type="caution">
+<Aside type="note">
  `flags` 中加上 `PTEFlags::V`，否则写入的 PTE 虽然有 PPN，
  V 位为 0，CPU 仍会认为该页未映射并触发 PageFault。
 </Aside>
 
-### 4. `unmap` —— 删除 VPN 映射
+### 删除映射 `unmap`
 
 **函数签名：**
 ```rust
@@ -184,7 +173,7 @@ pub fn unmap(&mut self, vpn: VirtPageNum)
 3.  将 PTE 清零（等价于 bits = 0），V 位变为 0，映射失效
 ```
 
-<Aside type="tip">
+<Aside type="note">
 `unmap` 只清零页表项，并**不**释放被映射的数据物理帧。数据帧的释放由
 `MapArea.data_frames` 中的 `FrameTracker` 负责（从 `BTreeMap` 中移除时自动析构）。
 中间节点的帧由 `PageTable.frames` 持有，直到整个 `PageTable` 销毁时释放。

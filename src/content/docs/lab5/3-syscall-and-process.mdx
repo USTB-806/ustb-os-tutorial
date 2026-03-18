@@ -1,133 +1,86 @@
 ---
-title: 系统调用与进程关系
-description: 连接用户态 API 与内核进程管理，实现 fork/exec/spawn/waitpid 的语义闭环。
+title: 进程相关系统调用
+description: 系统调用分发机制，以及 fork、exec、spawn、waitpid 等核心系统调用的语义与实现。
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-## 本节导入
+在用户态应用程序看来，内核提供了一系列功能强大的 API（系统调用）。本节将分析这些系统调用是如何从用户态传递到内核，并在内核中完成进程管理的。
 
-用户程序并不直接操作 PCB，它通过 ecall 发起系统调用，再由内核完成分发：
-
+系统调用的基本流程：
 ```text
-ecall -> trap_handler -> syscall(...) -> sys_* -> task/* -> schedule
+ecall (User) -> trap_handler (Kernel) -> syscall(...) -> sys_* -> task management -> schedule
 ```
 
----
+此处介绍几个典型的对进程的操作：
 
-## 1. 进程相关 syscall 分发入口
+`TaskControlBlock::fork` 就是创建另一个 `TaskControlBlock`, 而这个子进程和父进程拥有**初始一致但独立的地址空间和文件描述符表**，当然 `pid` 必然不同。
 
-`kernel/src/syscall/mod.rs`：
-
-```rust
-SYSCALL_FORK         => sys_fork(),
-SYSCALL_EXEC         => sys_exec(args[0] as *const u8),
-SYSCALL_WAITPID      => sys_waitpid(args[0] as isize, args[1] as *mut i32),
-SYSCALL_SPAWN        => sys_spawn(args[0] as *const u8),
-SYSCALL_SET_PRIORITY => sys_set_priority(args[0] as isize),
-```
-
----
-
-## 2. `sys_fork`
+设计的难点在于 `MemorySet::from_existed_user`, 可以理解为 `MemorySet` 的 `clone` 方法，这复制一个完全相同的地址空间，通过对 `MapArea` 下 `vpn_range` 对应 `ppn` 数据的修改，将原地址空间的数据复制到另一个地址空间中. `sys_fork` 在创建子进程时唯一的区别是，子进程的返回值为 0. 因此需要取 `trap_cx` 并将 `a0` 寄存器赋 0. 
 
 ```rust
-let current_task = current_task().unwrap();
-let new_task = current_task.fork();
-let new_pid = new_task.pid.0;
-let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
-trap_cx.x[10] = 0;
-add_task(new_task);
-new_pid as isize
-```
-
-语义：父进程返回子 pid，子进程返回 `0`。
-
----
-
-## 3. `sys_exec`
-
-```rust
-if let Some(data) = get_app_data_by_name(path.as_str()) {
-    let task = current_task().unwrap();
-    task.exec(data);
-    0
-} else {
-    -1
+impl MemorySet {
+    pub fn from_existed_user(user_space: &Self) -> Self {
+        let mut memory_set = Self::new_bare();
+        // map trampoline
+        memory_set.map_trampoline();
+        // copy data sections/trap_context/user_stack
+        for area in user_space.areas.iter() {
+            let new_area = MapArea::from_another(area);
+            memory_set.push(new_area, None);
+            // copy data from another space
+            for vpn in area.vpn_range {
+                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                dst_ppn
+                    .get_bytes_array()
+                    .copy_from_slice(src_ppn.get_bytes_array());
+            }
+        }
+        memory_set
+    }
 }
 ```
 
-`exec` 成功后 PID 不变，但地址空间、入口点、用户栈被新程序替换。
-
-<Aside type="tip">
-`fork + exec` 的经典组合是：先复制执行现场，再由子进程替换镜像。
-</Aside>
-
----
-
-## 4. `sys_spawn`
+`TaskControlBlock::exec` 加载一个新的 ELF 文件并替换原有应用地址空间的内容. `sys_exec` 先通过 `translated_str` 将该地址所对应的内容以 `char` 类型翻译后传回 `String`，然后返回 ELF 格式的数据并执行 `exec` 替换当前进程的应用地址空间.
 
 ```rust
-let task = current_task().unwrap().spwan(data);
-let new_pid = task.getpid();
-add_task(task);
-new_pid as isize
-```
-
-注意源码函数名是 spwan（保留原拼写）。它可理解为“直接创建并装载目标程序”。
-
----
-
-## 5. `sys_exit` 与 Zombie
-
-`sys_exit` 会进入 `exit_current_and_run_next(exit_code)`，效果是：
-
-1. 状态改为 `Zombie`；
-2. 写入退出码；
-3. 从运行路径移除并触发重新调度。
-
----
-
-## 6. `sys_waitpid` 契约
-
-当前代码保留 TODO，契约明确为：
-
-1. `pid == -1`：等待任意子进程；
-2. `pid > 0`：等待指定子进程；
-3. 无匹配子进程：`-1`；
-4. 有匹配但未退出：`-2`；
-5. 回收成功：写回退出码并返回子 pid。
-
-可直接参考注释中的 API 组合：
-
-- `inner.children.iter().any(...)` 判定匹配关系；
-- `inner.children.iter().enumerate().find(...)` 查找 Zombie；
-- `translated_refmut(inner.memory_set.token(), exit_code_ptr)` 写回用户态。
-
----
-
-## 7. `sys_set_priority`
-
-```rust
-if prio >= 2 {
-    inner.priority = prio as usize;
-    prio
-} else {
-    -1
+pub fn sys_exec(path: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_exec", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    if let Some(data) = get_app_data_by_name(path.as_str()) {
+        let task = current_task().unwrap();
+        task.exec(data);
+        0
+    } else {
+        -1
+    }
 }
 ```
 
-当 stride 调度生效后，priority 将影响长期 CPU 配额。
+由于执行 `sys_exec` 时原有的地址空间会被销毁，各物理页帧都会被回收，为了应对失效的上下文 `cx`, 在 `TaskControlBlock::exec` 中需要对 `trap_handler` 重建 `cx`.
 
----
+```rust
+/// Load a new elf to replace the original application address space and start execution
+    pub fn exec(&self, elf_data: &[u8]) {
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        let mut inner = self.inner_exclusive_access();
+        ...
+        // initialize trap_cx
+        let trap_cx = inner.get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            self.kernel_stack.get_top(),
+            trap_handler as usize,
+        );
+    }
+```
 
-## 8. 完整调用链示例
-
-以 fork -> 子进程 exec -> 父进程 waitpid 为例：
-
-1. 父进程 `fork` 获得子 pid；
-2. 子进程返回 `0` 并执行 `exec`；
-3. 子进程 `exit` 后进入 `Zombie`；
-4. 父进程 `waitpid` 回收并读取退出码。
-
-
+而 `sys_waitpid` 寻找当前进程子进程中符合 `pid` 且为僵尸进程的进程，将其回收，附带有对 `exit_code` 的处理和对旧 `pid` 的返回.

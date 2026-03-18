@@ -13,7 +13,7 @@ git checkout lab3
 
 ## 时间片轮转
 
-查看测试用例，你可以看到：
+当前内核的分时系统是存在问题的，请你尝试修复它. 查看我们测试用例：
 
 ```rust
 // user/rust/src/bin/ch3b_yield0.rs
@@ -36,6 +36,10 @@ fn main() -> i32 {
 
 接下来请你通过**修改内核**来支持这个程序的执行. 在本章中用户程序不需要修改.
 
+:::caution
+除去第二章的练习外，你都不需要修改 `user` 用户程序，只需要修改 `kernel` 内核来支持 `user` 中用户程序的功能
+:::
+
 正确的执行结果应该是：
 
 ```text
@@ -53,7 +57,7 @@ Test write C OK!
 All applications completed!
 ```
 
-实现时间片轮转.
+实现时间片轮转. 上手试试吧 :-)
 
 ## 支持 task_info 查询和 syscalls 统计
 

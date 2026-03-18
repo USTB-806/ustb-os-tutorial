@@ -47,9 +47,7 @@ pub fn stride_fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
 算法描述如下:
 
 1. 为每个进程设置一个当前 stride，表示该进程当前已经运行的“长度”. 另外设置其对应的 pass 值 (只与进程的优先权有关系)，表示对应进程在调度后，stride 需要进行的累加值.
-
 2. 每次需要调度时，从当前 runnable 态的进程中选择 stride 最小的进程调度. 对于获得调度的进程 P，将对应的 stride 加上其对应的步长 pass.
-
 3. 一个时间片后，回到上一步骤，重新调度当前 stride 最小的进程.
 
 为了实现对于 stride 的比较，你可能需要实现 `PartialOrd` 方法. 当然，直接比较也是可行的，这会更容易实现.

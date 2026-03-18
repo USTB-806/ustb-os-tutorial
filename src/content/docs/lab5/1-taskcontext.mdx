@@ -1,79 +1,119 @@
 ---
-title: 进程抽象与控制块（PCB）
-description: 结合源码理解 TaskControlBlock、PID 与内核栈、状态机以及 new/fork/exec 关键路径。
+title: 进程抽象
+description: 深入理解 TaskControlBlock 结构、进程标识符 (PID)、内核栈、进程状态机以及核心进程操作。
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-## 本节导入
+在前面的实验中，我们将任务看作是正在执行的程序片段。而在本章中，我们将进一步完善任务的概念，引入标准的**进程 (Process)** 抽象。
 
-1. 进程如何拥有独立身份；
-2. 进程如何创建、复制、替换；
-3. 进程退出后如何回收。
+## 任务控制块 TaskControlBlock
 
-在 `kernel/src/task/task.rs` 中：
+在 `kernel/src/task/task.rs` 中，我们定义了 `TaskControlBlock` (TCB) 来表示一个进程。它是操作系统管理进程的核心数据结构，也常被称为 **进程控制块 (Process Control Block, PCB)**。
 
 ```rust
 pub struct TaskControlBlock {
-    pub pid: PidHandle,
-    pub kernel_stack: KernelStack,
-    inner: UPSafeCell<TaskControlBlockInner>,
+    // Immutable
+    /// Process identifier
+    pub pid: PidHandle,
+    /// Kernel stack corresponding to PID
+    pub kernel_stack: KernelStack,
+    /// Mutable
+    inner: UPSafeCell<TaskControlBlockInner>,
 }
 ```
 
-`TaskControlBlockInner` 可按职责分三类：
+`PidHandle` 和 `KernelStack` 是初始化后不再变化的字段，可能发生变化的则放入 `TaskControlBlockInner` 中，如 Trap 上下文的物理页号 `trap_cx_ppn`, 上下文 `task_cx` 和应用地址空间 `memory_set` 等，注意上下文和 Trap 上下文存在区别，分别用于进程调度和特权级切换，保存的内容也分别是内核态执行状态和用户态执行状态。
 
-1. 执行状态：`task_cx`、`trap_cx_ppn`、`task_status`；
-2. 资源状态：`memory_set`、`fd_table`、`heap_bottom/program_brk`；
-3. 关系状态：`parent`、`children`、`exit_code`、`priority/stride`。
 
-<Aside type="tip">
-学习 PCB 的关键不是背字段，而是看字段在哪条路径被修改。字段变化本身就是进程语义。
-</Aside>
+内部状态 `TaskControlBlockInner` 包含了一个进程在运行过程中需要维护的所有动态状态，我们可以将其字段按功能分为三类：
 
----
+1.  **执行状态**：
+    - `task_cx`: 任务上下文，用于任务切换。
+    - `trap_cx_ppn`: Trap 上下文所在的物理页号。
+    - `task_status`: 当前进程的状态（如 Ready, Running, Zombie）。
 
-## 进程状态机与 Zombie
+2.  **资源状态**：
+    - `memory_set`: 进程的地址空间管理结构。
+    - `fd_table`: 文件描述符表（用于文件 I/O）。
+    - `heap_bottom`, `program_brk`: 用户堆的起始地址和当前断点。
+
+3.  **关系状态**：
+    - `parent`: 指向父进程的弱引用。
+    - `children`: 子进程的 TCB 列表。
+    - `exit_code`: 进程退出时的状态码。
+
+:::note[Linux 的实现]
+你可能会好奇 Linux 中的 `task_struct` 包含什么成员，不妨看看 [这个连接](https://elixir.bootlin.com/linux/v5.10.65/source/include/linux/sched.h#L648)。
+:::
+
+此处我们设计 `PidHandle` 来管理对 `pid` 的分配，与先前的 `FrameAllocator` 非常相似。`PID_ALLOCATOR` 和 `KSTACK_ALLOCATOR` 都是对 `RecycleAllocator` 的全局例化，`KernelStack::new` 被公有函数 `kstack_alloc` 所取代，原理不变仍是将 `KSTACK_ALLOCATOR` 分配得到的内核栈插入全局的内核地址空间 `KERNEL_SPACE` 中，使用 `insert_franed_area` 实现。
+
+```rust
+pub struct RecycleAllocator {
+    current: usize,
+    recycled: Vec<usize>,
+}
+```
+
+```rust
+/// allocate a new kernel stack
+pub fn kstack_alloc() -> KernelStack {
+    let kstack_id = KSTACK_ALLOCATOR.exclusive_access().alloc();
+    let (kstack_bottom, kstack_top) = kernel_stack_position(kstack_id);
+    KERNEL_SPACE.exclusive_access().insert_framed_area(
+        kstack_bottom.into(),
+        kstack_top.into(),
+        MapPermission::R | MapPermission::W,
+    );
+    KernelStack(kstack_id)
+}
+```
+
+## 进程状态机与僵尸进程
+
+随着进程功能的完善，我们需要引入新的进程状态：
 
 ```rust
 pub enum TaskStatus {
     UnInit,
     Ready,
     Running,
-    Zombie,
+    Zombie, // 僵尸态
 }
 ```
+
+进程的状态流转图更新为：
 
 ```text
 UnInit -> Ready <-> Running -> Zombie
 ```
-注意和第三章的`TaskStatus`进行区分，由于我们对进程的管理不断完善，我们不再直接让进程退出，
-而是让其先变成“僵尸进程”，然后由父进程进行回收。这样的目的是为了拿到子进程的退出码，可以用来判断子进程是否是正常退出，
-从而给出相应的反应和给用户的提示。
 
----
+关于**为什么需要 Zombie 状态**，注意与第三章的区别。在本章中，进程退出后不会立即销毁，而是进入 **僵尸 (Zombie)** 状态。这是一个中间状态，表示进程已经结束运行，但其内核栈和 PID 等资源尚未完全释放。
 
-## 三条核心路径：new / fork / exec
+这样设计的目的是为了**保留子进程的退出信息** (如 `exit_code`)。父进程可以通过 `wait` 系列系统调用来获取这些信息，从而判断子进程是正常退出还是异常终止，并据此做出相应的处理。只有当父进程回收了僵尸子进程后，该进程彻底销毁。
 
-### `TaskControlBlock::new`
+## 进程生命周期的操作
 
-1. `MemorySet::from_elf` 解析 ELF；
-2. 分配 PID 与内核栈；
-3. 初始化 `task_cx`；
-4. 构造 `TrapContext::app_init_context(...)`。
+简单的梳理，便于同学们更好理解源码。进程的生命周期主要由以下三个核心操作驱动：
 
-### `TaskControlBlock::fork`
+创建新进程的方法 `TaskControlBlock::new` 通常用于创建初始进程`initproc`。主要步骤包括：
+1.  解析 ELF 文件，创建地址空间 (`MemorySet::from_elf`)。
+2.  分配一个新的 PID 和内核栈。
+3.  初始化任务上下文 (`task_cx`)，设置入口地址。
+4.  在内核栈顶构造初始的 Trap 上下文 (`TrapContext`)，确保进程能正确进入用户态。
 
-1. 复制父进程地址空间；
-2. 克隆 fd 表；
-3. 建立 `parent/children` 关系；
-4. 子进程 `trap_cx.kernel_sp` 指向自己的内核栈；
-5. syscall 层设置子进程返回寄存器 `a0/x10 = 0`。
+复制进程 `TaskControlBlock::fork` 是 Unix 系统中经典的进程创建方式。主要步骤包括：
+1.  **复制地址空间**：创建父进程地址空间的副本（代码段共享，数据段复制）。
+2.  复制文件描述符：克隆父进程的 `fd_table`。
+3.  建立亲缘关系：将新进程的 `parent` 指向当前进程，并将其加入当前进程的 `children` 列表。
+4.  设置内核栈：子进程的 `trap_cx.kernel_sp` 指向其自己的内核栈。
+5.  修改返回值：修改子进程 Trap 上下文中的 `a0` 寄存器为 `0`，从而实现 `fork` 在子进程返回 0 的语义。
 
-### `TaskControlBlock::exec`
-
-1. 保留：PID、父子关系；
-2. 替换：地址空间、入口点、用户栈、堆边界。
+加载新程序 `TaskControlBlock::exec` 用于将当前进程替换为一个新的程序。主要步骤包括：
+1.  保留身份：保留当前的 PID 和父子关系。
+2.  替换镜像：解析新的 ELF 文件，替换原有的地址空间 `memory_set`。
+3.  重置状态：设置新的用户栈、堆边界，并重置 Trap 上下文为新程序的入口状态。
 
 
 
