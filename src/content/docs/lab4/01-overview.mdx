@@ -30,11 +30,16 @@ import { Aside } from '@astrojs/starlight/components';
 
 RISC-V 架构提供了多种分页模式。本实验采用 **SV39** 模式（Sv39 = Supervisor mode, 39-bit virtual address），这是 64 位 RISC-V 系统中常用的分页方案。
 
+当开启分页机制后，**MMU** (Memory Management Unit，内存管理单元) 会在硬件层面上自动处理地址转换。具体来说，当 CPU 执行指令进行访存时，MMU 会自动根据页表（Page Table）的设置遍历查找，将虚拟地址转换为物理地址。这一过程**无须软件干预**，从而为不同程序之间的地址隔离提供了坚实的硬件基础。
+
+
 ### 虚拟地址格式
+
+在 SV39 模式中，虚拟地址与物理地址格式如下：
 
 <img src="https://learningos.cn/rCore-Tutorial-Guide/_images/sv39-va-pa.png" alt="sv39" style={{ zoom: '67%' }} />
 
-在 SV39 模式中，64 位的虚拟地址被划分为以下几个部分：
+具体而言，64 位的虚拟地址被划分为以下几个部分：
 
 ```text
 63          39 38    30 29    21 20    12 11                           0
