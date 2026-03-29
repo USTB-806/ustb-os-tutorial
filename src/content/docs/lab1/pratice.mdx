@@ -39,6 +39,12 @@ cd /path/to/ustb-os-rustlings
 tar -czf ../ustb-os-rustlings.tar.gz .
 ```
 
+:::note[测评机 unknown extended header]
+若在 Windows 下直接执行 `tar` 命令，可能会在评测机上出现测评机不能识别 `SCHILY.fflags` 的问题，我们建议在 Windows 下使用 7zip 这类软件进行压缩，或者使用 Docker 里的 Linux 环境.
+
+因为 `tar` 命令在 Windows 和 Linux 上的实现差异导致 tar 包格式不兼容. 在 Windows 下的 `tar` 大概率是 `bsdtar`.
+:::
+
 将会在 rustlings 的**上级目录**生成一个 `ustb-os-rustlings.tar.gz` 文件，压缩包的内容是 rustlings 目录的文件.
 
 然后提交 `.tar.gz` 文件到 CG 进行评测.
